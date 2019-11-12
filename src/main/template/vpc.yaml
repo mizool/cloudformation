@@ -1,0 +1,410 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template deploys a VPC. Its IP range is quartered into four parts. The first three parts form private
+  subnets, the fourth is again quartered into three public subnets. Both the private and the public subnets are then
+  spread across three Availability Zones. All the required infrastructure, like internet gateway, nat gateways, and
+  default routes are included. Also, a bastion jump host is deployed in order to make any private machines reachable.
+
+Parameters:
+  cidrBlock:
+    Description: The CIDR range of the VPC. Note that it cannot be larger than 16 bits.
+    Type: String
+    Default: 10.0.0.0/16
+
+  firstQuarteringPartitionBits:
+    Description: The bit size of the first quartering, which is the size of the three private subnets. This is the size
+      of the CIDR block minus two. Unfortunately, CloudFormation does not support arithmetics, so this needs to be
+      passed in as a parameter.
+    Type: String
+    Default: 14
+
+  secondQuarteringPartitionBits:
+    Description: The bit size of the second quartering, which is the size of the three public subnets. This is the size
+      of the CIDR block minus four. Unfortunately, CloudFormation does not support arithmetics, so this needs to be
+      passed in as a parameter.
+    Type: String
+    Default: 12
+
+  bastionAmi:
+    Description: The AMI used to create the bastion jump host. By default, Amazon Linux 2 is used.
+    Type: AWS::EC2::Image::Id
+    Default: ami-0f3a43fbf2d3899f7
+
+  keyName:
+    Description: The Key Manager key to be added to the list of allowed keys.
+    Type: AWS::EC2::KeyPair::KeyName
+
+  bastionInstanceType:
+    Description: The instance type used for the bastion jump host.
+    Type: String
+    Default: t2.nano
+
+  authorizedKeys:
+    Description: A URL pointing to a list of authorized SSH keys to be appended as-is to ~/.ssh/authorized_keys.
+    Type: String
+    Default: https://pastebin.com/raw/jvnxihEu
+
+Resources:
+  vpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref cidrBlock
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} VPC
+
+  internetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Internet Gateway
+
+  vpcGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref internetGateway
+      VpcId: !Ref vpc
+
+  privateSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref vpc
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: ""
+      CidrBlock: !Select
+        - 0
+        - Fn::Cidr:
+          - !Ref cidrBlock
+          - "4"
+          - !Ref firstQuarteringPartitionBits
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Private Subnet AZ A
+
+  privateSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref vpc
+      AvailabilityZone: !Select
+        - 1
+        - Fn::GetAZs: ""
+      CidrBlock: !Select
+        - 1
+        - Fn::Cidr:
+          - !Ref cidrBlock
+          - "4"
+          - !Ref firstQuarteringPartitionBits
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Private Subnet AZ B
+
+  privateSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref vpc
+      AvailabilityZone: !Select
+        - 2
+        - Fn::GetAZs: ""
+      CidrBlock: !Select
+        - 2
+        - Fn::Cidr:
+          - !Ref cidrBlock
+          - "4"
+          - !Ref firstQuarteringPartitionBits
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Private Subnet AZ C
+
+  publicSubnetA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref vpc
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 0
+        - Fn::GetAZs: ""
+      CidrBlock: !Select
+        - 0
+        - Fn::Cidr:
+          - !Select
+            - 3
+            - Fn::Cidr:
+              - !Ref cidrBlock
+              - "4"
+              - !Ref firstQuarteringPartitionBits
+          - "4"
+          - !Ref secondQuarteringPartitionBits
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Public Subnet AZ A
+
+  publicSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref vpc
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 1
+        - Fn::GetAZs: ""
+      CidrBlock: !Select
+        - 1
+        - Fn::Cidr:
+          - !Select
+            - 3
+            - Fn::Cidr:
+              - !Ref cidrBlock
+              - "4"
+              - !Ref firstQuarteringPartitionBits
+          - "4"
+          - !Ref secondQuarteringPartitionBits
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Public Subnet AZ B
+
+  publicSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref vpc
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select
+        - 2
+        - Fn::GetAZs: ""
+      CidrBlock: !Select
+        - 2
+        - Fn::Cidr:
+          - !Select
+            - 3
+            - Fn::Cidr:
+              - !Ref cidrBlock
+              - "4"
+              - !Ref firstQuarteringPartitionBits
+          - "4"
+          - !Ref secondQuarteringPartitionBits
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Public Subnet AZ C
+
+  publicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Public Route Table
+
+  publicRoute:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref publicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref internetGateway
+
+  publicSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref publicRouteTable
+      SubnetId: !Ref publicSubnetA
+
+  publicSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref publicRouteTable
+      SubnetId: !Ref publicSubnetB
+
+  publicSubnetCRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref publicRouteTable
+      SubnetId: !Ref publicSubnetC
+
+  natGatewayAElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  natGatewayBElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  natGatewayCElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  natGatewayA:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt natGatewayAElasticIP.AllocationId
+      SubnetId: !Ref publicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} NAT Gateway AZ A
+
+  natGatewayB:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt natGatewayBElasticIP.AllocationId
+      SubnetId: !Ref publicSubnetB
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} NAT Gateway AZ B
+
+  natGatewayC:
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId: !GetAtt natGatewayCElasticIP.AllocationId
+      SubnetId: !Ref publicSubnetC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} NAT Gateway AZ C
+
+  privateRouteTableA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Private Route Table A
+
+  privateRouteTableB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Private Route Table B
+
+  privateRouteTableC:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Private Route Table C
+
+  privateRouteA:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref privateRouteTableA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref natGatewayA
+
+  privateRouteB:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref privateRouteTableB
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref natGatewayB
+
+  privateRouteC:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId: !Ref privateRouteTableC
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref natGatewayC
+
+  privateSubnetARouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref privateRouteTableA
+      SubnetId: !Ref privateSubnetA
+
+  privateSubnetBRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref privateRouteTableB
+      SubnetId: !Ref privateSubnetB
+
+  privateSubnetCRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref privateRouteTableC
+      SubnetId: !Ref privateSubnetC
+
+  bastionSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName} Bastion Security Group
+      GroupDescription: !Sub ${AWS::StackName} Bastion Security Group
+      VpcId: !Ref vpc
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Bastion Security Group
+
+  bastion:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref bastionAmi
+      KeyName: !Ref keyName
+      InstanceType: !Ref bastionInstanceType
+      NetworkInterfaces:
+        - DeviceIndex: "0"
+          GroupSet:
+           - !Ref bastionSecurityGroup
+          SubnetId: !Ref publicSubnetA
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Bastion
+      UserData:
+        Fn::Base64: !Sub |
+           #!/bin/bash -xe
+           yum update -y aws-cfn-bootstrap
+           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource bastion --region ${AWS::Region}
+           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource bastion --region ${AWS::Region}
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT5M
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          setup:
+            - "ssh_keys"
+        ssh_keys:
+          files:
+            /home/ec2-user/.ssh/additional_keys:
+              source: "https://pastebin.com/raw/jvnxihEu"
+              owner: root
+              group: root
+              mode: 000644
+          commands:
+            register_additional_keys:
+              command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
+
+  bastionElasticIP:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+      InstanceId: !Ref bastion
+
+Outputs:
+  outVpc:
+    Description: A reference to the created VPC.
+    Value: !Ref vpc
+
+  publicSubnets:
+    Description: A list of the public subnets.
+    Value: !Join
+      - ","
+      - - !Ref publicSubnetA
+        - !Ref publicSubnetB
+        - !Ref publicSubnetC
+
+  privateSubnets:
+    Description: A list of the private subnets.
+    Value: !Join
+      - ","
+      - - !Ref privateSubnetA
+        - !Ref privateSubnetB
+        - !Ref privateSubnetC
