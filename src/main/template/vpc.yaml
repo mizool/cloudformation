@@ -41,7 +41,7 @@ Parameters:
   authorizedKeys:
     Description: A URL pointing to a list of authorized SSH keys to be appended as-is to ~/.ssh/authorized_keys.
     Type: String
-    Default: https://pastebin.com/raw/jvnxihEu
+    MinLength: 1
 
 Resources:
   vpc:
@@ -225,16 +225,19 @@ Resources:
 
   natGatewayAElasticIP:
     Type: AWS::EC2::EIP
+    DependsOn: vpcGatewayAttachment
     Properties:
       Domain: vpc
 
   natGatewayBElasticIP:
     Type: AWS::EC2::EIP
+    DependsOn: vpcGatewayAttachment
     Properties:
       Domain: vpc
 
   natGatewayCElasticIP:
     Type: AWS::EC2::EIP
+    DependsOn: vpcGatewayAttachment
     Properties:
       Domain: vpc
 
@@ -343,55 +346,74 @@ Resources:
         - Key: Name
           Value: !Sub ${AWS::StackName} Bastion Security Group
 
-  bastion:
-    Type: AWS::EC2::Instance
+  bastionLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
       ImageId: !Ref bastionAmi
       KeyName: !Ref keyName
       InstanceType: !Ref bastionInstanceType
-      NetworkInterfaces:
-        - DeviceIndex: "0"
-          GroupSet:
-           - !Ref bastionSecurityGroup
-          SubnetId: !Ref publicSubnetA
-      Tags:
-        - Key: Name
-          Value: !Sub ${AWS::StackName} Bastion
+      SecurityGroups:
+        - !Ref bastionSecurityGroup
       UserData:
         Fn::Base64: !Sub |
            #!/bin/bash -xe
-           yum update -y aws-cfn-bootstrap
-           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource bastion --region ${AWS::Region}
-           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource bastion --region ${AWS::Region}
-    CreationPolicy:
-      ResourceSignal:
-        Timeout: PT5M
+           yum update -y
+           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource bastionLaunchConfiguration --region ${AWS::Region}
+           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource bastionAutoScalingGroup --region ${AWS::Region}
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
           setup:
             - "ssh_keys"
+            - "ntp"
         ssh_keys:
           files:
             /home/ec2-user/.ssh/additional_keys:
-              source: "https://pastebin.com/raw/jvnxihEu"
+              source: !Ref authorizedKeys
               owner: root
               group: root
               mode: 000644
           commands:
             register_additional_keys:
               command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
+        ntp:
+          packages:
+            yum:
+              ntp: []
+          services:
+            sysvinit:
+              ntpd:
+                enabled: true
+                ensureRunning: true
+                packages:
+                  yum:
+                    - ntp
 
-  bastionElasticIP:
-    Type: AWS::EC2::EIP
+  bastionAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
-      Domain: vpc
-      InstanceId: !Ref bastion
+      LaunchConfigurationName: !Ref bastionLaunchConfiguration
+      MaxSize: 2
+      MinSize: 0
+      DesiredCapacity: 1
+      VPCZoneIdentifier:
+        - !Ref publicSubnetA
+        - !Ref publicSubnetB
+        - !Ref publicSubnetC
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Bastion
+          PropagateAtLaunch: true
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT5M
 
 Outputs:
-  outVpc:
+  vpc:
     Description: A reference to the created VPC.
     Value: !Ref vpc
+    Export:
+      Name: !Sub ${AWS::StackName}-vpc
 
   publicSubnets:
     Description: A list of the public subnets.
@@ -400,6 +422,8 @@ Outputs:
       - - !Ref publicSubnetA
         - !Ref publicSubnetB
         - !Ref publicSubnetC
+    Export:
+      Name: !Sub ${AWS::StackName}-public-subnets
 
   privateSubnets:
     Description: A list of the private subnets.
@@ -408,3 +432,11 @@ Outputs:
       - - !Ref privateSubnetA
         - !Ref privateSubnetB
         - !Ref privateSubnetC
+    Export:
+      Name: !Sub ${AWS::StackName}-private-subnets
+
+  bastionSecurityGroup:
+    Description: The security group of the bastion, so that other security groups can allow SSH ingress from it.bastionSecurityGroup
+    Value: !Ref bastionSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-bastion-security-group
