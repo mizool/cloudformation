@@ -6,21 +6,19 @@ Description: This template deploys a VPC. Its IP range is quartered into four pa
 
 Parameters:
   cidrBlock:
-    Description: The CIDR range of the VPC. Note that it cannot be larger than 16 bits.
+    Description: The CIDR range of the VPC. Note that the maximum size of a VPC CIDR range is 16 bits.
     Type: String
     Default: 10.0.0.0/16
 
   firstQuarteringPartitionBits:
-    Description: The bit size of the first quartering, which is the size of the three private subnets. This is the size
-      of the CIDR block minus two. Unfortunately, CloudFormation does not support arithmetics, so this needs to be
-      passed in as a parameter.
+    Description: The cidr bits for the four subnets on the first level ("private subnet A", "private subnet B",
+      "private subnet C", "subnet containing public subnets A to C").
     Type: String
     Default: 14
 
   secondQuarteringPartitionBits:
-    Description: The bit size of the second quartering, which is the size of the three public subnets. This is the size
-      of the CIDR block minus four. Unfortunately, CloudFormation does not support arithmetics, so this needs to be
-      passed in as a parameter.
+    Description: The cidr bits for the four subnets on the second level ("public subnet A", "public subnet B", "public
+      subnet C", "unused").
     Type: String
     Default: 12
 
@@ -38,7 +36,7 @@ Parameters:
     Type: String
     Default: t2.nano
 
-  authorizedKeys:
+  bastionAuthorizedKeys:
     Description: A URL pointing to a list of authorized SSH keys to be appended as-is to ~/.ssh/authorized_keys.
     Type: String
     MinLength: 1
@@ -369,7 +367,7 @@ Resources:
         ssh_keys:
           files:
             /home/ec2-user/.ssh/additional_keys:
-              source: !Ref authorizedKeys
+              source: !Ref bastionAuthorizedKeys
               owner: root
               group: root
               mode: 000644
@@ -436,7 +434,7 @@ Outputs:
       Name: !Sub ${AWS::StackName}-private-subnets
 
   bastionSecurityGroup:
-    Description: The security group of the bastion, so that other security groups can allow SSH ingress from it.bastionSecurityGroup
+    Description: The security group of the bastion, so that other security groups can allow SSH ingress from it.
     Value: !Ref bastionSecurityGroup
     Export:
       Name: !Sub ${AWS::StackName}-bastion-security-group
