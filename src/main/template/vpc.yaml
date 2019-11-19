@@ -10,13 +10,13 @@ Parameters:
     Type: String
     Default: 10.0.0.0/16
 
-  firstQuarteringPartitionBits:
+  firstQuarteringCidrBits:
     Description: The cidr bits for the four subnets on the first level ("private subnet A", "private subnet B",
       "private subnet C", "subnet containing public subnets A to C").
     Type: String
     Default: 14
 
-  secondQuarteringPartitionBits:
+  secondQuarteringCidrBits:
     Description: The cidr bits for the four subnets on the second level ("public subnet A", "public subnet B", "public
       subnet C", "unused").
     Type: String
