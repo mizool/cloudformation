@@ -1,6 +1,9 @@
 == Cloudformation
 Cloudformation templates and scripts.
 
+== VPC architecture ==
+image::images/vpc.jpg[VPC architecture]
+
 == Continuous integration and deployment on Maven Central
 This project is built continuously by https://travis-ci.org/[Travis CI] using the scripts provided by https://github.com/mizool/travis-ci-maven-gitflow[Mizool's Travis CI Maven gitflow script repository].
 
