@@ -1,0 +1,318 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template deploys a Cassandra stack into an existing VPC.
+
+Parameters:
+  vpcStackName:
+    Description: The name of an existing VPC stack in which a Cassandra cluster will be created.
+    Type: String
+    MinLength: 1
+    Default: MahVPC
+
+  cassandraAmi:
+    Description: The AMI used to create Cassandra nodes. By default, Amazon Linux 2 is used.
+    Type: AWS::EC2::Image::Id
+    Default: ami-0f3a43fbf2d3899f7
+
+  keyName:
+    Description: The Key Manager key to be added to the list of allowed keys.
+    Type: AWS::EC2::KeyPair::KeyName
+    Default: incub8-frankfurt
+
+  cassandraInstanceType:
+    Description: The instance type used for the bastion jump host.
+    Type: String
+    Default: r5.large
+
+  authorizedKeys:
+    Description: A URL pointing to a list of authorized SSH keys to be appended as-is to ~/.ssh/authorized_keys.
+    Type: String
+    MinLength: 1
+    Default: https://pastebin.com/raw/jvnxihEu
+
+  clusterName:
+    Description: The cluster name to be set on the created Cassandra nodes. If you plan on migrating data between two
+      clusters, make sure that you give both clusters the same name.
+    Type: String
+    MinLength: 1
+    Default: Majestix
+
+  dataCenterNameSuffix:
+    Description: The data center name suffix. By default, the Ec2Snitch names data centers according to the AWS region
+      of the deployment (i.e. "eu-central") and the rack according to the availability zone (i.e. "1a"). Appending a
+      suffix to the data center name allows multiple data centers of the same cluster to run in the same region. If
+      this is not a use case for you, feel free to leave it blank.
+    Type: String
+
+  deleteEbsVolumesOnTermination:
+    Description: Whether the attached EBS volumes of the cassandra nodes shall be deleted on termination of the node or
+      not. In production systems, it might be prudent to set this to false, to ensure that data is never destroyed
+      erroneously.
+    Type: String
+    AllowedValues:
+      - "true"
+      - "false"
+    Default: "true"
+
+Mappings:
+  Scripts:
+    Cassandra:
+      CreateHostsEntry: |
+        #!/bin/bash -xe
+        sed -i "/127.0.0.1/c\127.0.0.1 localhost $(curl http://169.254.169.254/latest/meta-data/local-hostname)" /etc/hosts
+
+      SetupDataDirectories: |
+        #!/bin/bash -xe
+        mkdir /var/cassandra
+        blkid $(readlink -f /dev/sdf) || mkfs -t xfs $(readlink -f /dev/sdf)
+        mkdir /var/cassandra/data
+        xfs_admin -L cassandra-dt $(readlink -f /dev/sdf)
+        grep -q ^LABEL=cassandra-dt /etc/fstab || echo "LABEL=cassandra-dt /var/cassandra/data xfs defaults,nofail" >> /etc/fstab
+        grep -q "$(readlink -f /dev/sdf) /var/cassandra/data " /proc/mounts || mount /var/cassandra/data
+        blkid $(readlink -f /dev/sdg) || mkfs -t xfs $(readlink -f /dev/sdg)
+        mkdir /var/cassandra/commitlog
+        xfs_admin -L cassandra-cl $(readlink -f /dev/sdg)
+        grep -q ^LABEL=cassandra-cl /etc/fstab || echo "LABEL=cassandra-cl /var/cassandra/commitlog xfs defaults" >> /etc/fstab
+        grep -q "$(readlink -f /dev/sdg) /var/cassandra/commitlog " /proc/mounts || mount /var/cassandra/commitlog
+        chown -R cassandra /var/cassandra
+        sed -i "/^data_file_directories:$/ {N; s|data_file_directories:\n    - /var/lib/cassandra/data|data_file_directories:\n    - /var/cassandra/data|g}" ${CASSANDRA_YAML}
+        sed -i "/commitlog_directory:/c\commitlog_directory: /var/cassandra/commitlog" ${CASSANDRA_YAML}
+
+      UpdateCassandraYaml: |
+        #!/bin/bash -xe
+        sed -i "/cluster_name:/c\cluster_name: \'${CLUSTER_NAME}\'" ${CASSANDRA_YAML}
+        sed -i "/- seeds:/c\          - seeds: \"${SEED_LIST}\"" ${CASSANDRA_YAML}
+        sed -i "/listen_address:/c\listen_address: $(hostname -I)" ${CASSANDRA_YAML}
+        sed -i "/start_rpc:/c\start_rpc: true" ${CASSANDRA_YAML}
+        sed -i "/^rpc_address:/c\rpc_address: 0.0.0.0" ${CASSANDRA_YAML}
+        sed -i "/broadcast_rpc_address:/c\broadcast_rpc_address: $(hostname -I)" ${CASSANDRA_YAML}
+        sed -i "/disk_failure_policy:/c\disk_failure_policy: die" ${CASSANDRA_YAML}
+        sed -i "/commit_failure_policy:/c\commit_failure_policy: die" ${CASSANDRA_YAML}
+        sed -i "/trickle_fsync:/c\trickle_fsync: true" ${CASSANDRA_YAML}
+        sed -i "/endpoint_snitch:/c\endpoint_snitch: ${SNITCH_TYPE}" ${CASSANDRA_YAML}
+        sed -i "/^data_file_directories:$/ {N; s|data_file_directories:\n    - /var/lib/cassandra/data|data_file_directories:\n    - /var/cassandra/data|g}" ${CASSANDRA_YAML}
+        sed -i "/commitlog_directory:/c\commitlog_directory: /var/cassandra/commitlog" ${CASSANDRA_YAML}
+        sed -i "/read_request_timeout_in_ms:/c\read_request_timeout_in_ms: 60000" ${CASSANDRA_YAML}
+        sed -i "/range_request_timeout_in_ms:/c\range_request_timeout_in_ms: 60000" ${CASSANDRA_YAML}
+        sed -i "/write_request_timeout_in_ms:/c\write_request_timeout_in_ms: 60000" ${CASSANDRA_YAML}
+        sed -i "/counter_write_request_timeout_in_ms:/c\counter_write_request_timeout_in_ms: 60000" ${CASSANDRA_YAML}
+        sed -i "/cas_contention_timeout_in_ms:/c\cas_contention_timeout_in_ms: 60000" ${CASSANDRA_YAML}
+        sed -i "/truncate_request_timeout_in_ms:/c\truncate_request_timeout_in_ms: 60000" ${CASSANDRA_YAML}
+        sed -i "/^request_timeout_in_ms:/c\request_timeout_in_ms: 60000" ${CASSANDRA_YAML}
+
+      UpdateCassandraEnvSh: |
+        #!/bin/bash -xe
+        sed -i "/# max(min(1\/2 ram, 1024MB), min(1\/4 ram, 8GB))/c\    # max(min(1\/2 ram, 8GB), min(1\/4 ram, 8GB))" ${CASSANDRA_ENV_SH}
+        sed -i "/# calculate 1\/2 ram and cap to 1024MB/c\    # calculate 1\/2 ram and cap to 8192MB" ${CASSANDRA_ENV_SH}
+        sed -i "/if \[ \"\$half_system_memory_in_mb\" -gt \"1024\" \]/c\    if \[ \"\$half_system_memory_in_mb\" -gt \"8192\" \]" ${CASSANDRA_ENV_SH}
+        sed -i "/half_system_memory_in_mb=\"1024\"/c\        half_system_memory_in_mb=\"8192\"" ${CASSANDRA_ENV_SH}
+        sed -i "/# JVM_OPTS=\"\$JVM_OPTS -Djava.rmi.server.hostname=<public name>\"/c\JVM_OPTS=\"\$JVM_OPTS -Djava.rmi.server.hostname=$(hostname -I)\"" ${CASSANDRA_ENV_SH}
+        sed -i "/JMX_PORT=\"7199\"/c\JMX_PORT=\"7199\"\nLOCAL_JMX=no" ${CASSANDRA_ENV_SH}
+        sed -i "/JVM_OPTS=\"\$JVM_OPTS -Dcassandra.jmx.remote.port=\$JMX_PORT\"/c\  JVM_OPTS=\"\$JVM_OPTS -Dcom.sun.management.jmxremote.port=\$JMX_PORT\"" ${CASSANDRA_ENV_SH}
+        sed -i "/JVM_OPTS=\"\$JVM_OPTS -Dcom.sun.management.jmxremote.authenticate=true\"/c\  JVM_OPTS=\"\$JVM_OPTS -Dcom.sun.management.jmxremote.authenticate=false\"\n  JVM_OPTS=\"\$JVM_OPTS -Dcom.sun.management.jmxremote.ssl=false\"" ${CASSANDRA_ENV_SH}
+
+      UpdateJvmOptions: |
+        #!/bin/bash -xe
+        sed -i "/-XX:+HeapDumpOnOutOfMemoryError/c\#-XX:+HeapDumpOnOutOfMemoryError" ${JVM_OPTS}
+        sed -i "/-XX:+UseParNewGC/c\#-XX:+UseParNewGC" ${JVM_OPTS}
+        sed -i "/-XX:+UseConcMarkSweepGC/c\#-XX:+UseConcMarkSweepGC" ${JVM_OPTS}
+        sed -i "/-XX:+CMSParallelRemarkEnabled/c\#-XX:+CMSParallelRemarkEnabled" ${JVM_OPTS}
+        sed -i "/-XX:SurvivorRatio=8/c\#-XX:SurvivorRatio=8" ${JVM_OPTS}
+        sed -i "/-XX:MaxTenuringThreshold=1/c\#-XX:MaxTenuringThreshold=1" ${JVM_OPTS}
+        sed -i "/-XX:CMSInitiatingOccupancyFraction=75/c\#-XX:CMSInitiatingOccupancyFraction=75" ${JVM_OPTS}
+        sed -i "/-XX:+UseCMSInitiatingOccupancyOnly/c\#-XX:+UseCMSInitiatingOccupancyOnly" ${JVM_OPTS}
+        sed -i "/-XX:CMSWaitDuration=10000/c\#-XX:CMSWaitDuration=10000" ${JVM_OPTS}
+        sed -i "/-XX:+CMSParallelInitialMarkEnabled/c\#-XX:+CMSParallelInitialMarkEnabled" ${JVM_OPTS}
+        sed -i "/-XX:+CMSEdenChunksRecordAlways/c\#-XX:+CMSEdenChunksRecordAlways" ${JVM_OPTS}
+        sed -i "/-XX:+CMSClassUnloadingEnabled/c\#-XX:+CMSClassUnloadingEnabled" ${JVM_OPTS}
+        sed -i "/#-XX:+UseG1GC/c\-XX:+UseG1GC" ${JVM_OPTS}
+        sed -i "/#-XX:MaxGCPauseMillis=500/c\-XX:MaxGCPauseMillis=1000" ${JVM_OPTS}
+        sed -i "/#-Xloggc:\/var\/log\/cassandra\/gc.log/c\-Xloggc:\/var\/log\/cassandra\/gc.log" ${JVM_OPTS}
+
+      UpdateCassandraRackdcProperties: |
+        #!/bin/bash -xe
+        sed -i "/#dc_suffix=/c\dc_suffix=${DATACENTER_NAME_SUFFIX}" ${CASSANDRA_RACKDC_PROPERTIES}
+
+      DisableBootstrapping: |
+        #!/bin/bash -xe
+        echo 'auto_bootstrap: false' >> ${CASSANDRA_YAML}
+
+Resources:
+  securityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName} Cassandra Security Group
+      GroupDescription: !Sub ${AWS::StackName} Cassandra Security Group
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-vpc"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: 22
+        ToPort: 22
+        SourceSecurityGroupId:
+          Fn::ImportValue:
+            !Sub "${vpcStackName}-bastion-security-group"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Cassandra Security Group
+
+  cassandraSeedALaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref cassandraAmi
+      KeyName: !Ref keyName
+      InstanceType: !Ref cassandraInstanceType
+      SecurityGroups:
+        - !Ref securityGroup
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdf"
+          Ebs:
+            VolumeSize: 1024
+            VolumeType: "gp2"
+            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
+        - DeviceName: "/dev/sdg"
+          Ebs:
+            VolumeSize: 64
+            VolumeType: "gp2"
+            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
+      UserData:
+        Fn::Base64: !Sub |
+           #!/bin/bash -xe
+           yum update -y
+           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource cassandraSeedALaunchConfiguration --region ${AWS::Region}
+           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource cassandraSeedAAutoScalingGroup --region ${AWS::Region}
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          setup:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
+            - "add_cassandra_repo"
+            - "install_cassandra"
+            - "configure_cassandra"
+            - "disable_bootstrapping"
+            - "start_cassandra"
+        ssh_keys:
+          files:
+            /home/ec2-user/.ssh/additional_keys:
+              source: !Ref authorizedKeys
+              owner: root
+              group: root
+              mode: 000644
+          commands:
+            register_additional_keys:
+              command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
+        ntp:
+          packages:
+            yum:
+              ntp: []
+          services:
+            sysvinit:
+              ntpd:
+                enabled: true
+                ensureRunning: true
+                packages:
+                  yum:
+                    - ntp
+        haveged:
+          packages:
+            rpm:
+              haveged: "http://dl.fedoraproject.org/pub/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
+          services:
+            sysvinit:
+              haveged:
+                enabled: true
+                ensureRunning: true
+        openjdk8:
+          packages:
+            yum:
+              java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
+              java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
+        add_cassandra_repo:
+          files:
+            /etc/yum.repos.d/cassandra.repo:
+              content: |
+                [cassandra]
+                name=Apache Cassandra
+                baseurl=https://www.apache.org/dist/cassandra/redhat/311x/
+                gpgcheck=1
+                repo_gpgcheck=1
+                gpgkey=https://www.apache.org/dist/cassandra/KEYS
+              owner: root
+              group: root
+              mode: 000644
+        install_cassandra:
+          packages:
+            yum:
+              cassandra: []
+        configure_cassandra:
+          commands:
+            01_configure_hosts:
+              command: !FindInMap ["Scripts", "Cassandra", "CreateHostsEntry"]
+            02_setup_data_directories:
+              command: !FindInMap ["Scripts", "Cassandra", "SetupDataDirectories"]
+              env:
+                CASSANDRA_YAML: "/etc/cassandra/cassandra.yaml"
+            03_update_cassandra_yaml:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraYaml"]
+              env:
+                CASSANDRA_YAML: "/etc/cassandra/cassandra.yaml"
+                CLUSTER_NAME: !Ref clusterName
+                SEED_LIST: "127.0.0.1"
+            04_update_cassandra_env_sh:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraEnvSh"]
+              env:
+                CASSANDRA_ENV_SH: "/etc/cassandra/cassandra-env.sh"
+            05_update_jvm_options:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateJvmOptions"]
+              env:
+                JVM_OPTIONS: "/etc/cassandra/jvm.options"
+            06_update_cassandra_rackdc_properties:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraRackdcProperties"]
+              env:
+                CASSANDRA_RACKDC_PROPERTIES: "/etc/cassandra/cassandra-rackdc.properties"
+                DATACENTER_NAME_SUFFIX: !Ref dataCenterNameSuffix
+        disable_bootstrapping:
+          commands:
+            disable_bootstrapping:
+              command: !FindInMap ["Scripts", "Cassandra", "DisableBootstrapping"]
+              env:
+                CASSANDRA_YAML: "/etc/cassandra/cassandra.yaml"
+        start_cassandra:
+          services:
+            sysvinit:
+              cassandra:
+                enabled: true
+                ensureRunning: true
+
+  cassandraSeedAAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchConfigurationName: !Ref cassandraSeedALaunchConfiguration
+      MaxSize: 1
+      MinSize: 0
+      DesiredCapacity: 1
+      VPCZoneIdentifier:
+        - Fn::Select:
+          - 0
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Cassandra Seed 1
+          PropagateAtLaunch: true
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT5M
+
+Outputs:
+  securityGroup:
+    Description: The cassandra security group, so that other security groups can allow SSH ingress from it, or register
+      additional security group ingress on it.
+    Value: !Ref securityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-security-group
