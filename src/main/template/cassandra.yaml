@@ -1,14 +1,15 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: This template deploys a Cassandra stack into an existing VPC.
+Description: This template deploys a Cassandra stack into an existing VPC. The Cassandra stack consists of three seed
+  node instances, and an autoscaling group for additional instances. Note that scaling down is harder than scaling up.
+  There is no automatism that decommissions on termination, so this needs to be done manually.
 
 Parameters:
   vpcStackName:
     Description: The name of an existing VPC stack in which a Cassandra cluster will be created.
     Type: String
     MinLength: 1
-    Default: MahVPC
 
-  cassandraAmi:
+  ami:
     Description: The AMI used to create Cassandra nodes. By default, Amazon Linux 2 is used.
     Type: AWS::EC2::Image::Id
     Default: ami-0f3a43fbf2d3899f7
@@ -16,18 +17,17 @@ Parameters:
   keyName:
     Description: The Key Manager key to be added to the list of allowed keys.
     Type: AWS::EC2::KeyPair::KeyName
-    Default: incub8-frankfurt
 
-  cassandraInstanceType:
-    Description: The instance type used for the bastion jump host.
+  instanceType:
+    Description: The instance type used for the cassandra nodes.
     Type: String
+    MinLength: 1
     Default: r5.large
 
   authorizedKeys:
     Description: A URL pointing to a list of authorized SSH keys to be appended as-is to ~/.ssh/authorized_keys.
     Type: String
     MinLength: 1
-    Default: https://pastebin.com/raw/jvnxihEu
 
   clusterName:
     Description: The cluster name to be set on the created Cassandra nodes. If you plan on migrating data between two
@@ -52,7 +52,7 @@ Parameters:
 
   deleteEbsVolumesOnTermination:
     Description: Whether the attached EBS volumes of the cassandra nodes shall be deleted on termination of the node or
-      not. In production systems, it might be prudent to set this to false, to ensure that data is never destroyed
+      not. In production systems, it might be prudent to set this to false, to ensure that data is never destroyed.
       erroneously.
     Type: String
     AllowedValues:
@@ -89,7 +89,7 @@ Mappings:
         #!/bin/bash -xe
         export CASSANDRA_YAML="/etc/cassandra/conf/cassandra.yaml"
         sed -i "/cluster_name:/c\cluster_name: \'${CLUSTER_NAME}\'" ${CASSANDRA_YAML}
-        sed -i "/- seeds:/c\          - seeds: \"$(hostname -I)\"" ${CASSANDRA_YAML}
+        sed -i "/- seeds:/c\          - seeds: \"${SEED_NODES}\"" ${CASSANDRA_YAML}
         sed -i "/listen_address:/c\listen_address: $(hostname -I)" ${CASSANDRA_YAML}
         sed -i "/start_rpc:/c\start_rpc: true" ${CASSANDRA_YAML}
         sed -i "/^rpc_address:/c\rpc_address: 0.0.0.0" ${CASSANDRA_YAML}
@@ -169,6 +169,51 @@ Resources:
         - Key: Name
           Value: !Sub ${AWS::StackName} Cassandra Security Group
 
+  port7000securityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 7000
+      ToPort: 7000
+      SourceSecurityGroupId: !Ref securityGroup
+
+  port7001securityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 7001
+      ToPort: 7001
+      SourceSecurityGroupId: !Ref securityGroup
+
+  port7199securityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 7199
+      ToPort: 7199
+      SourceSecurityGroupId: !Ref securityGroup
+
+  port9042securityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 9042
+      ToPort: 9042
+      SourceSecurityGroupId: !Ref securityGroup
+
+  port9160securityGroupIngress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 9160
+      ToPort: 9160
+      SourceSecurityGroupId: !Ref securityGroup
+
   hostedZone:
     Type: "AWS::Route53::HostedZone"
     Properties:
@@ -179,7 +224,7 @@ Resources:
               !Sub "${vpcStackName}-vpc"
           VPCRegion: !Ref "AWS::Region"
 
-  allowAllRole:
+  allowRoute53RecordSetManagementRole:
     Type: "AWS::IAM::Role"
     Properties:
       AssumeRolePolicyDocument:
@@ -198,7 +243,11 @@ Resources:
             Version: "2012-10-17"
             Statement:
               - Effect: Allow
-                Action: "*"
+                Action:
+                  - "route53:GetHostedZone"
+                  - "route53:ListHostedZones"
+                  - "route53:ListResourceRecordSets"
+                  - "route53:ChangeResourceRecordSets"
                 Resource: "*"
 
   instanceProfile:
@@ -206,17 +255,23 @@ Resources:
     Properties:
       Path: "/"
       Roles:
-       - !Ref allowAllRole
+       - !Ref allowRoute53RecordSetManagementRole
 
-  cassandraSeedALaunchConfiguration:
-    Type: AWS::AutoScaling::LaunchConfiguration
+  seedA:
+    Type: "AWS::EC2::Instance"
     Properties:
-      ImageId: !Ref cassandraAmi
-      IamInstanceProfile: !Ref instanceProfile
+      ImageId: !Ref ami
       KeyName: !Ref keyName
-      InstanceType: !Ref cassandraInstanceType
-      SecurityGroups:
+      InstanceType: !Ref instanceType
+      IamInstanceProfile: !Ref instanceProfile
+      SecurityGroupIds:
         - !Ref securityGroup
+      SubnetId: !Select
+        - 0
+        - Fn::Split:
+          - ","
+          - Fn::ImportValue:
+              !Sub "${vpcStackName}-private-subnets"
       BlockDeviceMappings:
         - DeviceName: "/dev/sdf"
           Ebs:
@@ -228,12 +283,18 @@ Resources:
             VolumeSize: 64
             VolumeType: "gp2"
             DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Seed A
       UserData:
         Fn::Base64: !Sub |
            #!/bin/bash -xe
            yum update -y
-           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource cassandraSeedALaunchConfiguration --region ${AWS::Region}
-           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource cassandraSeedAAutoScalingGroup --region ${AWS::Region}
+           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource seedA --region ${AWS::Region}
+           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedA --region ${AWS::Region}
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT5M
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
@@ -243,12 +304,14 @@ Resources:
             - "haveged"
             - "openjdk8"
             - "aws_cli"
+            - "register_dns"
             - "add_cassandra_repo"
             - "install_cassandra"
             - "configure_cassandra"
             - "disable_bootstrapping"
             - "start_cassandra"
             - "ensure_cassandra_is_running"
+            - "unregister_dns"
         ssh_keys:
           files:
             /home/ec2-user/.ssh/additional_keys:
@@ -287,14 +350,6 @@ Resources:
               java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
         aws_cli:
           files:
-            /home/ec2-user/.aws/credentials:
-              content: |
-                [default]
-                aws_access_key_id=
-                aws_secret_access_key=
-              owner: ec2-user
-              group: ec2-user
-              mode: 000644
             /home/ec2-user/.aws/config:
               content: !Sub |
                 [default]
@@ -330,6 +385,14 @@ Resources:
               command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraYaml"]
               env:
                 CLUSTER_NAME: !Ref clusterName
+                SEED_NODES: !Join
+                  - ""
+                  - - "a.seed."
+                    - !Ref internalDomain
+                    - ",b.seed."
+                    - !Ref internalDomain
+                    - ",c.seed."
+                    - !Ref internalDomain
             04_update_cassandra_env_sh:
               command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraEnvSh"]
             05_update_jvm_options:
@@ -340,6 +403,597 @@ Resources:
           commands:
             disable_bootstrapping:
               command: !FindInMap ["Scripts", "Cassandra", "DisableBootstrapping"]
+        register_dns:
+          commands:
+            01_create_change_batch:
+              command: !Join
+                - ""
+                - - "echo '{\"Changes\": [{\"Action\": \"UPSERT\", \"ResourceRecordSet\": {\"Name\": \"a.seed."
+                  - !Ref internalDomain
+                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
+            02_register_dns:
+              command: !Join
+                - ""
+                - - "aws route53 change-resource-record-sets --hosted-zone-id "
+                  - !Ref hostedZone
+                  - " --change-batch file:///home/ec2-user/change-batch.json"
+            03_remove_change_batch:
+              command: "rm /home/ec2-user/change-batch.json"
+            04_add_hosts_entry:
+              command: !Join
+                - ""
+                - - "echo \"$(hostname -I) a.seed."
+                  - !Ref internalDomain
+                  - "\" >> /etc/hosts"
+        start_cassandra:
+          services:
+            sysvinit:
+              cassandra:
+                enabled: true
+                ensureRunning: true
+        ensure_cassandra_is_running:
+          commands:
+            01_sleep:
+              command: sleep 60
+            02_check:
+              command: nodetool info
+        unregister_dns:
+          commands:
+            01_create_change_batch:
+              command: !Join
+                - ""
+                - - "echo '{\"Changes\": [{\"Action\": \"DELETE\", \"ResourceRecordSet\": {\"Name\": \"a.seed."
+                  - !Ref internalDomain
+                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
+            02_unregister_dns:
+              command: !Join
+                - ""
+                - - "aws route53 change-resource-record-sets --hosted-zone-id "
+                  - !Ref hostedZone
+                  - " --change-batch file:///home/ec2-user/change-batch.json"
+            03_remove_change_batch:
+              command: "rm /home/ec2-user/change-batch.json"
+
+  seedADnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref hostedZone
+      Name: !Sub "a.seed.${internalDomain}"
+      Type: A
+      TTL: 60
+      ResourceRecords:
+      - !GetAtt seedA.PrivateIp
+
+  seedB:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      ImageId: !Ref ami
+      KeyName: !Ref keyName
+      InstanceType: !Ref instanceType
+      IamInstanceProfile: !Ref instanceProfile
+      SecurityGroupIds:
+        - !Ref securityGroup
+      SubnetId: !Select
+        - 1
+        - Fn::Split:
+          - ","
+          - Fn::ImportValue:
+              !Sub "${vpcStackName}-private-subnets"
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdf"
+          Ebs:
+            VolumeSize: 1024
+            VolumeType: "gp2"
+            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
+        - DeviceName: "/dev/sdg"
+          Ebs:
+            VolumeSize: 64
+            VolumeType: "gp2"
+            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Seed B
+      UserData:
+        Fn::Base64: !Sub |
+           #!/bin/bash -xe
+           yum update -y
+           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource seedB --region ${AWS::Region}
+           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedB --region ${AWS::Region}
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT5M
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          setup:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
+            - "aws_cli"
+            - "register_dns"
+            - "add_cassandra_repo"
+            - "install_cassandra"
+            - "configure_cassandra"
+            - "disable_bootstrapping"
+            - "start_cassandra"
+            - "ensure_cassandra_is_running"
+            - "unregister_dns"
+        ssh_keys:
+          files:
+            /home/ec2-user/.ssh/additional_keys:
+              source: !Ref authorizedKeys
+              owner: root
+              group: root
+              mode: 000644
+          commands:
+            register_additional_keys:
+              command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
+        ntp:
+          packages:
+            yum:
+              ntp: []
+          services:
+            sysvinit:
+              ntpd:
+                enabled: true
+                ensureRunning: true
+                packages:
+                  yum:
+                    - ntp
+        haveged:
+          packages:
+            rpm:
+              haveged: "http://dl.fedoraproject.org/pub/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
+          services:
+            sysvinit:
+              haveged:
+                enabled: true
+                ensureRunning: true
+        openjdk8:
+          packages:
+            yum:
+              java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
+              java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
+        aws_cli:
+          files:
+            /home/ec2-user/.aws/config:
+              content: !Sub |
+                [default]
+                region=${AWS::Region}
+                output=json
+              owner: ec2-user
+              group: ec2-user
+              mode: 000644
+        add_cassandra_repo:
+          files:
+            /etc/yum.repos.d/cassandra.repo:
+              content: |
+                [cassandra]
+                name=Apache Cassandra
+                baseurl=https://www.apache.org/dist/cassandra/redhat/311x/
+                gpgcheck=1
+                repo_gpgcheck=1
+                gpgkey=https://www.apache.org/dist/cassandra/KEYS
+              owner: root
+              group: root
+              mode: 000644
+        install_cassandra:
+          packages:
+            yum:
+              cassandra: []
+        configure_cassandra:
+          commands:
+            01_configure_hosts:
+              command: !FindInMap ["Scripts", "Cassandra", "CreateHostsEntry"]
+            02_setup_data_directories:
+              command: !FindInMap ["Scripts", "Cassandra", "SetupDataDirectories"]
+            03_update_cassandra_yaml:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraYaml"]
+              env:
+                CLUSTER_NAME: !Ref clusterName
+                SEED_NODES: !Join
+                  - ""
+                  - - "a.seed."
+                    - !Ref internalDomain
+                    - ",b.seed."
+                    - !Ref internalDomain
+                    - ",c.seed."
+                    - !Ref internalDomain
+            04_update_cassandra_env_sh:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraEnvSh"]
+            05_update_jvm_options:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateJvmOptions"]
+            06_update_cassandra_rackdc_properties:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraRackdcProperties"]
+        disable_bootstrapping:
+          commands:
+            disable_bootstrapping:
+              command: !FindInMap ["Scripts", "Cassandra", "DisableBootstrapping"]
+        register_dns:
+          commands:
+            01_create_change_batch:
+              command: !Join
+                - ""
+                - - "echo '{\"Changes\": [{\"Action\": \"UPSERT\", \"ResourceRecordSet\": {\"Name\": \"b.seed."
+                  - !Ref internalDomain
+                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
+            02_register_dns:
+              command: !Join
+                - ""
+                - - "aws route53 change-resource-record-sets --hosted-zone-id "
+                  - !Ref hostedZone
+                  - " --change-batch file:///home/ec2-user/change-batch.json"
+            03_remove_change_batch:
+              command: "rm /home/ec2-user/change-batch.json"
+            04_add_hosts_entry:
+              command: !Join
+                - ""
+                - - "echo \"$(hostname -I) b.seed."
+                  - !Ref internalDomain
+                  - "\" >> /etc/hosts"
+        start_cassandra:
+          services:
+            sysvinit:
+              cassandra:
+                enabled: true
+                ensureRunning: true
+        ensure_cassandra_is_running:
+          commands:
+            01_sleep:
+              command: sleep 60
+            02_check:
+              command: nodetool info
+        unregister_dns:
+          commands:
+            01_create_change_batch:
+              command: !Join
+                - ""
+                - - "echo '{\"Changes\": [{\"Action\": \"DELETE\", \"ResourceRecordSet\": {\"Name\": \"b.seed."
+                  - !Ref internalDomain
+                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
+            02_unregister_dns:
+              command: !Join
+                - ""
+                - - "aws route53 change-resource-record-sets --hosted-zone-id "
+                  - !Ref hostedZone
+                  - " --change-batch file:///home/ec2-user/change-batch.json"
+            03_remove_change_batch:
+              command: "rm /home/ec2-user/change-batch.json"
+
+  seedBDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref hostedZone
+      Name: !Sub "b.seed.${internalDomain}"
+      Type: A
+      TTL: 60
+      ResourceRecords:
+      - !GetAtt seedB.PrivateIp
+
+  seedC:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      ImageId: !Ref ami
+      KeyName: !Ref keyName
+      InstanceType: !Ref instanceType
+      IamInstanceProfile: !Ref instanceProfile
+      SecurityGroupIds:
+        - !Ref securityGroup
+      SubnetId: !Select
+        - 2
+        - Fn::Split:
+          - ","
+          - Fn::ImportValue:
+              !Sub "${vpcStackName}-private-subnets"
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdf"
+          Ebs:
+            VolumeSize: 1024
+            VolumeType: "gp2"
+            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
+        - DeviceName: "/dev/sdg"
+          Ebs:
+            VolumeSize: 64
+            VolumeType: "gp2"
+            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Seed C
+      UserData:
+        Fn::Base64: !Sub |
+           #!/bin/bash -xe
+           yum update -y
+           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource seedC --region ${AWS::Region}
+           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedC --region ${AWS::Region}
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT5M
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          setup:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
+            - "aws_cli"
+            - "register_dns"
+            - "add_cassandra_repo"
+            - "install_cassandra"
+            - "configure_cassandra"
+            - "disable_bootstrapping"
+            - "start_cassandra"
+            - "ensure_cassandra_is_running"
+            - "unregister_dns"
+        ssh_keys:
+          files:
+            /home/ec2-user/.ssh/additional_keys:
+              source: !Ref authorizedKeys
+              owner: root
+              group: root
+              mode: 000644
+          commands:
+            register_additional_keys:
+              command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
+        ntp:
+          packages:
+            yum:
+              ntp: []
+          services:
+            sysvinit:
+              ntpd:
+                enabled: true
+                ensureRunning: true
+                packages:
+                  yum:
+                    - ntp
+        haveged:
+          packages:
+            rpm:
+              haveged: "http://dl.fedoraproject.org/pub/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
+          services:
+            sysvinit:
+              haveged:
+                enabled: true
+                ensureRunning: true
+        openjdk8:
+          packages:
+            yum:
+              java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
+              java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
+        aws_cli:
+          files:
+            /home/ec2-user/.aws/config:
+              content: !Sub |
+                [default]
+                region=${AWS::Region}
+                output=json
+              owner: ec2-user
+              group: ec2-user
+              mode: 000644
+        add_cassandra_repo:
+          files:
+            /etc/yum.repos.d/cassandra.repo:
+              content: |
+                [cassandra]
+                name=Apache Cassandra
+                baseurl=https://www.apache.org/dist/cassandra/redhat/311x/
+                gpgcheck=1
+                repo_gpgcheck=1
+                gpgkey=https://www.apache.org/dist/cassandra/KEYS
+              owner: root
+              group: root
+              mode: 000644
+        install_cassandra:
+          packages:
+            yum:
+              cassandra: []
+        configure_cassandra:
+          commands:
+            01_configure_hosts:
+              command: !FindInMap ["Scripts", "Cassandra", "CreateHostsEntry"]
+            02_setup_data_directories:
+              command: !FindInMap ["Scripts", "Cassandra", "SetupDataDirectories"]
+            03_update_cassandra_yaml:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraYaml"]
+              env:
+                CLUSTER_NAME: !Ref clusterName
+                SEED_NODES: !Join
+                  - ""
+                  - - "a.seed."
+                    - !Ref internalDomain
+                    - ",b.seed."
+                    - !Ref internalDomain
+                    - ",c.seed."
+                    - !Ref internalDomain
+            04_update_cassandra_env_sh:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraEnvSh"]
+            05_update_jvm_options:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateJvmOptions"]
+            06_update_cassandra_rackdc_properties:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraRackdcProperties"]
+        disable_bootstrapping:
+          commands:
+            disable_bootstrapping:
+              command: !FindInMap ["Scripts", "Cassandra", "DisableBootstrapping"]
+        register_dns:
+          commands:
+            01_create_change_batch:
+              command: !Join
+                - ""
+                - - "echo '{\"Changes\": [{\"Action\": \"UPSERT\", \"ResourceRecordSet\": {\"Name\": \"c.seed."
+                  - !Ref internalDomain
+                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
+            02_register_dns:
+              command: !Join
+                - ""
+                - - "aws route53 change-resource-record-sets --hosted-zone-id "
+                  - !Ref hostedZone
+                  - " --change-batch file:///home/ec2-user/change-batch.json"
+            03_remove_change_batch:
+              command: "rm /home/ec2-user/change-batch.json"
+            04_add_hosts_entry:
+              command: !Join
+                - ""
+                - - "echo \"$(hostname -I) c.seed."
+                  - !Ref internalDomain
+                  - "\" >> /etc/hosts"
+        start_cassandra:
+          services:
+            sysvinit:
+              cassandra:
+                enabled: true
+                ensureRunning: true
+        ensure_cassandra_is_running:
+          commands:
+            01_sleep:
+              command: sleep 60
+            02_check:
+              command: nodetool info
+        unregister_dns:
+          commands:
+            01_create_change_batch:
+              command: !Join
+                - ""
+                - - "echo '{\"Changes\": [{\"Action\": \"DELETE\", \"ResourceRecordSet\": {\"Name\": \"c.seed."
+                  - !Ref internalDomain
+                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
+            02_unregister_dns:
+              command: !Join
+                - ""
+                - - "aws route53 change-resource-record-sets --hosted-zone-id "
+                  - !Ref hostedZone
+                  - " --change-batch file:///home/ec2-user/change-batch.json"
+            03_remove_change_batch:
+              command: "rm /home/ec2-user/change-batch.json"
+
+  seedCDnsRecord:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: !Ref hostedZone
+      Name: !Sub "c.seed.${internalDomain}"
+      Type: A
+      TTL: 60
+      ResourceRecords:
+      - !GetAtt seedC.PrivateIp
+
+  launchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref ami
+      IamInstanceProfile: !Ref instanceProfile
+      KeyName: !Ref keyName
+      InstanceType: !Ref instanceType
+      SecurityGroups:
+        - !Ref securityGroup
+      BlockDeviceMappings:
+        - DeviceName: "/dev/sdf"
+          Ebs:
+            VolumeSize: 1024
+            VolumeType: "gp2"
+            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
+        - DeviceName: "/dev/sdg"
+          Ebs:
+            VolumeSize: 64
+            VolumeType: "gp2"
+            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
+      UserData:
+        Fn::Base64: !Sub |
+           #!/bin/bash -xe
+           yum update -y
+           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource launchConfiguration --region ${AWS::Region}
+           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource autoScalingGroup --region ${AWS::Region}
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          setup:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
+            - "add_cassandra_repo"
+            - "install_cassandra"
+            - "configure_cassandra"
+            - "start_cassandra"
+            - "ensure_cassandra_is_running"
+        ssh_keys:
+          files:
+            /home/ec2-user/.ssh/additional_keys:
+              source: !Ref authorizedKeys
+              owner: root
+              group: root
+              mode: 000644
+          commands:
+            register_additional_keys:
+              command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
+        ntp:
+          packages:
+            yum:
+              ntp: []
+          services:
+            sysvinit:
+              ntpd:
+                enabled: true
+                ensureRunning: true
+                packages:
+                  yum:
+                    - ntp
+        haveged:
+          packages:
+            rpm:
+              haveged: "http://dl.fedoraproject.org/pub/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
+          services:
+            sysvinit:
+              haveged:
+                enabled: true
+                ensureRunning: true
+        openjdk8:
+          packages:
+            yum:
+              java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
+              java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
+        add_cassandra_repo:
+          files:
+            /etc/yum.repos.d/cassandra.repo:
+              content: |
+                [cassandra]
+                name=Apache Cassandra
+                baseurl=https://www.apache.org/dist/cassandra/redhat/311x/
+                gpgcheck=1
+                repo_gpgcheck=1
+                gpgkey=https://www.apache.org/dist/cassandra/KEYS
+              owner: root
+              group: root
+              mode: 000644
+        install_cassandra:
+          packages:
+            yum:
+              cassandra: []
+        configure_cassandra:
+          commands:
+            01_configure_hosts:
+              command: !FindInMap ["Scripts", "Cassandra", "CreateHostsEntry"]
+            02_setup_data_directories:
+              command: !FindInMap ["Scripts", "Cassandra", "SetupDataDirectories"]
+            03_update_cassandra_yaml:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraYaml"]
+              env:
+                CLUSTER_NAME: !Ref clusterName
+                SEED_NODES: !Join
+                  - ""
+                  - - "a.seed."
+                    - !Ref internalDomain
+                    - ",b.seed."
+                    - !Ref internalDomain
+                    - ",c.seed."
+                    - !Ref internalDomain
+            04_update_cassandra_env_sh:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraEnvSh"]
+            05_update_jvm_options:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateJvmOptions"]
+            06_update_cassandra_rackdc_properties:
+              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraRackdcProperties"]
         start_cassandra:
           services:
             sysvinit:
@@ -353,11 +1007,15 @@ Resources:
             02_check:
               command: nodetool info
 
-  cassandraSeedAAutoScalingGroup:
+  autoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
+    DependsOn:
+      - seedADnsRecord
+      - seedBDnsRecord
+      - seedCDnsRecord
     Properties:
-      LaunchConfigurationName: !Ref cassandraSeedALaunchConfiguration
-      MaxSize: 1
+      LaunchConfigurationName: !Ref launchConfiguration
+      MaxSize: 30
       MinSize: 0
       DesiredCapacity: 1
       VPCZoneIdentifier:
@@ -367,13 +1025,22 @@ Resources:
             - ","
             - Fn::ImportValue:
                 !Sub "${vpcStackName}-private-subnets"
+        - Fn::Select:
+          - 1
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+        - Fn::Select:
+          - 2
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
       Tags:
         - Key: Name
-          Value: !Sub ${AWS::StackName} Seed 1
+          Value: !Sub ${AWS::StackName} AZ
           PropagateAtLaunch: true
-    CreationPolicy:
-      ResourceSignal:
-        Timeout: PT5M
 
 Outputs:
   securityGroup:
@@ -382,3 +1049,16 @@ Outputs:
     Value: !Ref securityGroup
     Export:
       Name: !Sub ${AWS::StackName}-security-group
+
+  seedNodes:
+    Description: The list of seed nodes to be used by connecting systems.
+    Value: !Join
+     - ""
+     - - "a.seed."
+       - !Ref internalDomain
+       - ",b.seed."
+       - !Ref internalDomain
+       - ",c.seed."
+       - !Ref internalDomain
+    Export:
+      Name: !Sub ${AWS::StackName}-seed-nodes
