@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: This template deploys managed Redis.
+Description: This template deploys an ElastiCache managed Redis.
 
 Parameters:
   vpcStackName:
@@ -65,16 +65,16 @@ Resources:
           - GroupId
 
 Outputs:
-  securityGroup:
-    Description: The redis security group, so that other security groups can allow ingress from themselves to it
+  SecurityGroup:
+    Description: The redis security group, so that other security groups can allow ingress from themselves to it.
     Value: !Ref securityGroup
     Export:
       Name: !Sub ${AWS::StackName}-security-group
 
-  cacheCluster:
-    Description: The redis endpoint.
+  DnsName:
+    Description: The redis DNS name.
     Value: !GetAtt
       - cacheCluster
       - RedisEndpoint.Address
     Export:
-      Name: !Sub ${AWS::StackName}-redis-endpoint
+      Name: !Sub ${AWS::StackName}-redis-dns-name
