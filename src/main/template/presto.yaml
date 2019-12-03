@@ -556,3 +556,10 @@ Outputs:
     Value: !Ref securityGroup
     Export:
       Name: !Sub ${AWS::StackName}-security-group
+
+  DnsName:
+    Description: The DNS name under which presto is reachable.
+    Value: !Ref securityGroup
+    Export:
+        Fn::ImportValue:
+          !Sub "${privateLoadBalancerStackName}-private-lb-dns-name"
