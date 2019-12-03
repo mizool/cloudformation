@@ -128,7 +128,7 @@ Resources:
       ToPort: 9042
       SourceSecurityGroupId: !Ref securityGroup
 
-  cassandra9042Ingress:
+  cassandra9160Ingress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       GroupId:
