@@ -34,7 +34,6 @@ Parameters:
       clusters, make sure that you give both clusters the same name.
     Type: String
     MinLength: 1
-    Default: Majestix
 
   dataCenterNameSuffix:
     Description: The data center name suffix. By default, the Ec2Snitch names data centers according to the AWS region
@@ -98,8 +97,6 @@ Mappings:
         sed -i "/commit_failure_policy:/c\commit_failure_policy: die" ${CASSANDRA_YAML}
         sed -i "/trickle_fsync:/c\trickle_fsync: true" ${CASSANDRA_YAML}
         sed -i "/endpoint_snitch:/c\endpoint_snitch: Ec2Snitch" ${CASSANDRA_YAML}
-        sed -i "/^data_file_directories:$/ {N; s|data_file_directories:\n    - /var/lib/cassandra/data|data_file_directories:\n    - /var/cassandra/data|g}" ${CASSANDRA_YAML}
-        sed -i "/commitlog_directory:/c\commitlog_directory: /var/cassandra/commitlog" ${CASSANDRA_YAML}
         sed -i "/read_request_timeout_in_ms:/c\read_request_timeout_in_ms: 60000" ${CASSANDRA_YAML}
         sed -i "/range_request_timeout_in_ms:/c\range_request_timeout_in_ms: 60000" ${CASSANDRA_YAML}
         sed -i "/write_request_timeout_in_ms:/c\write_request_timeout_in_ms: 60000" ${CASSANDRA_YAML}
@@ -158,16 +155,20 @@ Resources:
       VpcId:
         Fn::ImportValue:
           !Sub "${vpcStackName}-vpc"
-      SecurityGroupIngress:
-      - IpProtocol: tcp
-        FromPort: 22
-        ToPort: 22
-        SourceSecurityGroupId:
-          Fn::ImportValue:
-            !Sub "${vpcStackName}-bastion-security-group"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Cassandra Security Group
+
+  bastion22Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-bastion-security-group"
 
   port7000securityGroupIngress:
     Type: AWS::EC2::SecurityGroupIngress
@@ -318,7 +319,7 @@ Resources:
               source: !Ref authorizedKeys
               owner: root
               group: root
-              mode: 000644
+              mode: "000644"
           commands:
             register_additional_keys:
               command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
@@ -357,7 +358,7 @@ Resources:
                 output=json
               owner: ec2-user
               group: ec2-user
-              mode: 000644
+              mode: "000644"
         add_cassandra_repo:
           files:
             /etc/yum.repos.d/cassandra.repo:
@@ -370,7 +371,7 @@ Resources:
                 gpgkey=https://www.apache.org/dist/cassandra/KEYS
               owner: root
               group: root
-              mode: 000644
+              mode: "000644"
         install_cassandra:
           packages:
             yum:
@@ -525,7 +526,7 @@ Resources:
               source: !Ref authorizedKeys
               owner: root
               group: root
-              mode: 000644
+              mode: "000644"
           commands:
             register_additional_keys:
               command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
@@ -564,7 +565,7 @@ Resources:
                 output=json
               owner: ec2-user
               group: ec2-user
-              mode: 000644
+              mode: "000644"
         add_cassandra_repo:
           files:
             /etc/yum.repos.d/cassandra.repo:
@@ -577,7 +578,7 @@ Resources:
                 gpgkey=https://www.apache.org/dist/cassandra/KEYS
               owner: root
               group: root
-              mode: 000644
+              mode: "000644"
         install_cassandra:
           packages:
             yum:
@@ -732,7 +733,7 @@ Resources:
               source: !Ref authorizedKeys
               owner: root
               group: root
-              mode: 000644
+              mode: "000644"
           commands:
             register_additional_keys:
               command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
@@ -771,7 +772,7 @@ Resources:
                 output=json
               owner: ec2-user
               group: ec2-user
-              mode: 000644
+              mode: "000644"
         add_cassandra_repo:
           files:
             /etc/yum.repos.d/cassandra.repo:
@@ -784,7 +785,7 @@ Resources:
                 gpgkey=https://www.apache.org/dist/cassandra/KEYS
               owner: root
               group: root
-              mode: 000644
+              mode: "000644"
         install_cassandra:
           packages:
             yum:
@@ -923,7 +924,7 @@ Resources:
               source: !Ref authorizedKeys
               owner: root
               group: root
-              mode: 000644
+              mode: "000644"
           commands:
             register_additional_keys:
               command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
@@ -965,7 +966,7 @@ Resources:
                 gpgkey=https://www.apache.org/dist/cassandra/KEYS
               owner: root
               group: root
-              mode: 000644
+              mode: "000644"
         install_cassandra:
           packages:
             yum:
@@ -1039,7 +1040,7 @@ Resources:
                 !Sub "${vpcStackName}-private-subnets"
       Tags:
         - Key: Name
-          Value: !Sub ${AWS::StackName} AZ
+          Value: !Sub ${AWS::StackName} AS
           PropagateAtLaunch: true
 
 Outputs:
@@ -1053,12 +1054,9 @@ Outputs:
   seedNodes:
     Description: The list of seed nodes to be used by connecting systems.
     Value: !Join
-     - ""
-     - - "a.seed."
-       - !Ref internalDomain
-       - ",b.seed."
-       - !Ref internalDomain
-       - ",c.seed."
-       - !Ref internalDomain
+     - ","
+     - - !Ref seedADnsRecord
+       - !Ref seedBDnsRecord
+       - !Ref seedCDnsRecord
     Export:
       Name: !Sub ${AWS::StackName}-seed-nodes
