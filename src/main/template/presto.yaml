@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: This template deploys a Presto cluster.
+Description: This template deploys a Presto cluster connected to a cassandra database.
 
 Parameters:
   vpcStackName:
@@ -559,7 +559,8 @@ Outputs:
 
   DnsName:
     Description: The DNS name under which presto is reachable.
-    Value: !Ref securityGroup
+    Value:
+      Fn::ImportValue:
+        !Sub "${privateLoadBalancerStackName}-private-lb-dns-name"
     Export:
-        Fn::ImportValue:
-          !Sub "${privateLoadBalancerStackName}-private-lb-dns-name"
+      Name: !Sub ${AWS::StackName}-dns-name
