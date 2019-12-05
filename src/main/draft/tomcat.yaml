@@ -451,7 +451,7 @@ Resources:
 
 Outputs:
   SecurityGroup:
-    Description: The redis security group, so that other security groups can allow ingress from themselves to it.
+    Description: The tomcat security group, so that other security groups can allow ingress from themselves to it.
     Value: !Ref securityGroup
     Export:
       Name: !Sub ${AWS::StackName}-security-group
