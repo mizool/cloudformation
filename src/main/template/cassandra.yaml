@@ -1060,3 +1060,23 @@ Outputs:
        - !Ref seedCDnsRecord
     Export:
       Name: !Sub ${AWS::StackName}-seed-nodes
+
+  dataCenterName:
+    Description: The name of the Cassandra data center that is contained in this stack.
+    Value:
+      Fn::Join:
+        - ""
+        - - Fn::Select:
+            - 0
+            - Fn::Split:
+              - "-"
+              - !Ref AWS::Region
+          - "-"
+          - Fn::Select:
+            - 1
+            - Fn::Split:
+              - "-"
+              - !Ref AWS::Region
+          - !Ref dataCenterNameSuffix
+    Export:
+      Name: !Sub ${AWS::StackName}-data-center-name
