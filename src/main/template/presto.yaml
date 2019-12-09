@@ -51,22 +51,34 @@ Parameters:
     MinLength: 1
 
 Resources:
-  securityGroup:
+  coordinatorSecurityGroup:
     Type: AWS::EC2::SecurityGroup
     Properties:
-      GroupName: !Sub ${AWS::StackName} Security Group
-      GroupDescription: !Sub ${AWS::StackName} Security Group
+      GroupName: !Sub ${AWS::StackName} Coordinator Security Group
+      GroupDescription: !Sub ${AWS::StackName} Coordinator Security Group
       VpcId:
         Fn::ImportValue:
           !Sub "${vpcStackName}-vpc"
       Tags:
         - Key: Name
-          Value: !Sub ${AWS::StackName} Security Group
+          Value: !Sub ${AWS::StackName} Coordinator Security Group
 
-  bastion22Ingress:
+  workerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName} Worker Security Group
+      GroupDescription: !Sub ${AWS::StackName} Worker Security Group
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-vpc"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Worker Security Group
+
+  bastionCoordinator22Ingress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
-      GroupId: !Ref securityGroup
+      GroupId: !Ref coordinatorSecurityGroup
       IpProtocol: tcp
       FromPort: 22
       ToPort: 22
@@ -74,10 +86,21 @@ Resources:
         Fn::ImportValue:
           !Sub "${vpcStackName}-bastion-security-group"
 
-  loadBalancer8080Ingress:
+  bastionWorker22Ingress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
-      GroupId: !Ref securityGroup
+      GroupId: !Ref workerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-bastion-security-group"
+
+  loadBalancerCoordinator8080Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref coordinatorSecurityGroup
       IpProtocol: tcp
       FromPort: 8080
       ToPort: 8080
@@ -85,16 +108,36 @@ Resources:
         Fn::ImportValue:
           !Sub "${privateLoadBalancerStackName}-security-group"
 
-  self8080Ingress:
+  workerLoadBalancer8080Ingress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
-      GroupId: !Ref securityGroup
+      GroupId:
+        Fn::ImportValue:
+          !Sub "${privateLoadBalancerStackName}-security-group"
       IpProtocol: tcp
       FromPort: 8080
       ToPort: 8080
-      SourceSecurityGroupId: !Ref securityGroup
+      SourceSecurityGroupId: !Ref workerSecurityGroup
 
-  cassandra9042Ingress:
+  coordinatorWorker8080Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref workerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref coordinatorSecurityGroup
+
+  workerCoordinator8080Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref coordinatorSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref workerSecurityGroup
+
+  coordinatorCassandra9042Ingress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       GroupId:
@@ -103,9 +146,20 @@ Resources:
       IpProtocol: tcp
       FromPort: 9042
       ToPort: 9042
-      SourceSecurityGroupId: !Ref securityGroup
+      SourceSecurityGroupId: !Ref coordinatorSecurityGroup
 
-  cassandra9160Ingress:
+  workerCassandra9042Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Fn::ImportValue:
+          !Sub "${cassandraStackName}-security-group"
+      IpProtocol: tcp
+      FromPort: 9042
+      ToPort: 9042
+      SourceSecurityGroupId: !Ref workerSecurityGroup
+
+  coordinatorCassandra9160Ingress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       GroupId:
@@ -114,7 +168,18 @@ Resources:
       IpProtocol: tcp
       FromPort: 9160
       ToPort: 9160
-      SourceSecurityGroupId: !Ref securityGroup
+      SourceSecurityGroupId: !Ref coordinatorSecurityGroup
+
+  workerCassandra9160Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Fn::ImportValue:
+          !Sub "${cassandraStackName}-security-group"
+      IpProtocol: tcp
+      FromPort: 9160
+      ToPort: 9160
+      SourceSecurityGroupId: !Ref workerSecurityGroup
 
   coordinatorTargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
@@ -187,7 +252,7 @@ Resources:
       KeyName: !Ref keyName
       InstanceType: !Ref coordinatorInstanceType
       SecurityGroups:
-        - !Ref securityGroup
+        - !Ref coordinatorSecurityGroup
       UserData:
         Fn::Base64: !Sub |
            #!/bin/bash -xe
@@ -338,7 +403,7 @@ Resources:
       KeyName: !Ref keyName
       InstanceType: !Ref workerInstanceType
       SecurityGroups:
-        - !Ref securityGroup
+        - !Ref workerSecurityGroup
       UserData:
         Fn::Base64: !Sub |
            #!/bin/bash -xe
@@ -552,8 +617,9 @@ Resources:
 
 Outputs:
   SecurityGroup:
-    Description: The presto security group, so that other security groups can allow ingress from themselves to it.
-    Value: !Ref securityGroup
+    Description: The presto coordinator security group, so that other security groups can allow ingress from themselves
+      to it.
+    Value: !Ref coordinatorSecurityGroup
     Export:
       Name: !Sub ${AWS::StackName}-security-group
 
