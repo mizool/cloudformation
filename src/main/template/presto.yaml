@@ -30,12 +30,6 @@ Parameters:
     MinLength: 2
     AllowedPattern: "^[a-z0-9]*$"
 
-  privateLoadBalancerStackName:
-    Description: The name of an existing private load balancer stack that Presto will add a listener to, and register
-      its coordinator target group on it.
-    Type: String
-    MinLength: 1
-
   ami:
     Description: The AMI used to create the instances. By default, Amazon Linux 2 is used.
     Type: AWS::EC2::Image::Id
@@ -49,6 +43,13 @@ Parameters:
     Description: A URL pointing to a list of authorized SSH keys to be appended as-is to ~/.ssh/authorized_keys.
     Type: String
     MinLength: 1
+
+  internalDomain:
+    Description: The internal DNS domain name to be used by the Presto cluster. If you run multiple clusters in the
+      same VPC, the internal domain names must be distinct.
+    Type: String
+    MinLength: 1
+    Default: presto
 
 Resources:
   coordinatorSecurityGroup:
@@ -97,7 +98,7 @@ Resources:
         Fn::ImportValue:
           !Sub "${vpcStackName}-bastion-security-group"
 
-  loadBalancerCoordinator8080Ingress:
+  bastionCoordinator8080Ingress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       GroupId: !Ref coordinatorSecurityGroup
@@ -106,18 +107,7 @@ Resources:
       ToPort: 8080
       SourceSecurityGroupId:
         Fn::ImportValue:
-          !Sub "${privateLoadBalancerStackName}-security-group"
-
-  workerLoadBalancer8080Ingress:
-    Type: AWS::EC2::SecurityGroupIngress
-    Properties:
-      GroupId:
-        Fn::ImportValue:
-          !Sub "${privateLoadBalancerStackName}-security-group"
-      IpProtocol: tcp
-      FromPort: 8080
-      ToPort: 8080
-      SourceSecurityGroupId: !Ref workerSecurityGroup
+          !Sub "${vpcStackName}-bastion-security-group"
 
   coordinatorWorker8080Ingress:
     Type: AWS::EC2::SecurityGroupIngress
@@ -181,69 +171,48 @@ Resources:
       ToPort: 9160
       SourceSecurityGroupId: !Ref workerSecurityGroup
 
-  coordinatorTargetGroup:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+  hostedZone:
+    Type: AWS::Route53::HostedZone
     Properties:
-      HealthCheckEnabled: true
-      HealthCheckIntervalSeconds: 10
-      HealthCheckPath: /v1/info
-      HealthCheckTimeoutSeconds: 5
-      HealthyThresholdCount: 3
-      Port: 8080
-      Protocol: HTTP
-      TargetType: instance
-      UnhealthyThresholdCount: 2
-      VpcId:
-        Fn::ImportValue:
-          !Sub "${vpcStackName}-vpc"
+      Name: !Ref internalDomain
+      VPCs:
+        - VPCId:
+            Fn::ImportValue:
+              !Sub "${vpcStackName}-vpc"
+          VPCRegion: !Ref "AWS::Region"
 
-  workerTargetGroup:
-    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+  allowRoute53RecordSetManagementRole:
+    Type: "AWS::IAM::Role"
     Properties:
-      HealthCheckEnabled: true
-      HealthCheckIntervalSeconds: 10
-      HealthCheckPath: /v1/info
-      HealthCheckTimeoutSeconds: 5
-      HealthyThresholdCount: 3
-      Port: 8080
-      Protocol: HTTP
-      TargetType: instance
-      UnhealthyThresholdCount: 2
-      VpcId:
-        Fn::ImportValue:
-          !Sub "${vpcStackName}-vpc"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: "AllowAllPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "route53:GetHostedZone"
+                  - "route53:ListHostedZones"
+                  - "route53:ListResourceRecordSets"
+                  - "route53:ChangeResourceRecordSets"
+                Resource: "*"
 
-  coordinatorListenerRule:
-    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+  instanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
     Properties:
-      Actions:
-        - Type: forward
-          TargetGroupArn: !Ref coordinatorTargetGroup
-      Conditions:
-        - Field: path-pattern
-          Values:
-            - "*"
-      ListenerArn:
-        Fn::ImportValue:
-          !Sub "${privateLoadBalancerStackName}-private-lb-listener8080"
-      Priority: 1
-
-  # This only exists so that the target group is not unused. The health checks for an unused target group are not even
-  # attempted, messing up the autoscaling checks.
-  workerListenerRule:
-    Type: AWS::ElasticLoadBalancingV2::ListenerRule
-    Properties:
-      Actions:
-        - Type: forward
-          TargetGroupArn: !Ref workerTargetGroup
-      Conditions:
-        - Field: path-pattern
-          Values:
-            - "*"
-      ListenerArn:
-        Fn::ImportValue:
-          !Sub "${privateLoadBalancerStackName}-private-lb-listener8080"
-      Priority: 2
+      Path: "/"
+      Roles:
+       - !Ref allowRoute53RecordSetManagementRole
 
   coordinatorLaunchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
@@ -251,6 +220,7 @@ Resources:
       ImageId: !Ref ami
       KeyName: !Ref keyName
       InstanceType: !Ref coordinatorInstanceType
+      IamInstanceProfile: !Ref instanceProfile
       SecurityGroups:
         - !Ref coordinatorSecurityGroup
       UserData:
@@ -267,6 +237,8 @@ Resources:
             - "ntp"
             - "haveged"
             - "openjdk8"
+            - "aws_cli"
+            - "register_dns"
             - "download_presto"
             - "configure_presto"
             - "start_presto"
@@ -307,6 +279,38 @@ Resources:
             yum:
               java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
               java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
+        aws_cli:
+          files:
+            /home/ec2-user/.aws/config:
+              content: !Sub |
+                [default]
+                region=${AWS::Region}
+                output=json
+              owner: ec2-user
+              group: ec2-user
+              mode: "000644"
+        register_dns:
+          commands:
+            01_create_change_batch:
+              command: !Join
+                - ""
+                - - "echo '{\"Changes\": [{\"Action\": \"UPSERT\", \"ResourceRecordSet\": {\"Name\": \"coordinator."
+                  - !Ref internalDomain
+                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
+            02_register_dns:
+              command: !Join
+                - ""
+                - - "aws route53 change-resource-record-sets --hosted-zone-id "
+                  - !Ref hostedZone
+                  - " --change-batch file:///home/ec2-user/change-batch.json"
+            03_remove_change_batch:
+              command: "rm /home/ec2-user/change-batch.json"
+            04_add_hosts_entry:
+              command: !Join
+                - ""
+                - - "echo \"$(hostname -I) coordinator."
+                  - !Ref internalDomain
+                  - "\" >> /etc/hosts"
         download_presto:
           commands:
             download_presto:
@@ -352,7 +356,13 @@ Resources:
                 coordinator=true
                 node-scheduler.include-coordinator=false
                 discovery-server.enabled=true
-                discovery.uri=http://localhost:8080
+                discovery.uri=http://{{discoveryUri}}:8080
+              context:
+                discoveryUri:
+                  Fn::Join:
+                    - ""
+                    - - "coordinator."
+                      - !Ref internalDomain
               owner: root
               group: root
               mode: "000644"
@@ -381,11 +391,18 @@ Resources:
                 export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
                 echo "node.id=${INSTANCE_ID}" >> /opt/presto/presto-server/etc/node.properties
         start_presto:
-          commands:
-            start_presto:
-              command: |
+          files:
+            /home/ec2-user/run-presto.sh:
+              content: !Sub |
                 #!/bin/bash -xe
-                /opt/presto/presto-server/bin/launcher start
+                /opt/presto/presto-server/bin/launcher run
+                shutdown
+              owner: root
+              group: root
+              mode: "000755"
+          commands:
+            run_presto:
+              command: nohup /home/ec2-user/run-presto.sh &>/dev/null &
         setup_presto_cli:
           commands:
             setup_presto_cli:
@@ -503,8 +520,10 @@ Resources:
                 discovery.uri=http://{{discoveryUri}}:8080
               context:
                 discoveryUri:
-                  Fn::ImportValue:
-                    !Sub "${privateLoadBalancerStackName}-private-lb-dns-name"
+                  Fn::Join:
+                    - ""
+                    - - "coordinator."
+                      - !Ref internalDomain
               owner: root
               group: root
               mode: "000644"
@@ -533,23 +552,26 @@ Resources:
                 export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
                 echo "node.id=${INSTANCE_ID}" >> /opt/presto/presto-server/etc/node.properties
         start_presto:
-          commands:
-            start_presto:
-              command: |
+          files:
+            /home/ec2-user/run-presto.sh:
+              content: !Sub |
                 #!/bin/bash -xe
-                /opt/presto/presto-server/bin/launcher start
+                /opt/presto/presto-server/bin/launcher run
+                shutdown
+              owner: root
+              group: root
+              mode: "000755"
+          commands:
+            run_presto:
+              command: nohup /home/ec2-user/run-presto.sh &>/dev/null &
 
   coordinatorAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       LaunchConfigurationName: !Ref coordinatorLaunchConfiguration
-      TargetGroupARNs:
-        - !Ref coordinatorTargetGroup
       MaxSize: 2
       MinSize: 1
       DesiredCapacity: 1
-      HealthCheckGracePeriod: 240
-      HealthCheckType: ELB
       VPCZoneIdentifier:
         - Fn::Select:
           - 0
@@ -581,13 +603,9 @@ Resources:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       LaunchConfigurationName: !Ref workerLaunchConfiguration
-      TargetGroupARNs:
-        - !Ref workerTargetGroup
       MaxSize: 20
       MinSize: 1
       DesiredCapacity: 1
-      HealthCheckGracePeriod: 240
-      HealthCheckType: ELB
       VPCZoneIdentifier:
         - Fn::Select:
           - 0
@@ -624,17 +642,11 @@ Outputs:
       Name: !Sub ${AWS::StackName}-security-group
 
   DnsName:
-    Description: The DNS name under which presto is reachable.
+    Description: The DNS name under which the presto coordinator is reachable.
     Value:
-      Fn::ImportValue:
-        !Sub "${privateLoadBalancerStackName}-private-lb-dns-name"
+      Fn::Join:
+        - ""
+        - - "coordinator."
+          - !Ref internalDomain
     Export:
       Name: !Sub ${AWS::StackName}-dns-name
-
-  LbSecurityGroup:
-    Description: The security group of the private load balancer used by Presto
-    Value:
-      Fn::ImportValue:
-        !Sub "${privateLoadBalancerStackName}-security-group"
-    Export:
-      Name: !Sub ${AWS::StackName}-private-lb-security-group
