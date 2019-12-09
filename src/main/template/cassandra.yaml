@@ -9,6 +9,12 @@ Parameters:
     Type: String
     MinLength: 1
 
+  reaperStackName:
+    Description: The name of an existing Cassandra Reaper stack, so that this stack can allow ingress from it.
+      Note that you still need to add this stack manually to the Reaper afterwards.
+    Type: String
+    MinLength: 1
+
   ami:
     Description: The AMI used to create Cassandra nodes. By default, Amazon Linux 2 is used.
     Type: AWS::EC2::Image::Id
@@ -196,6 +202,17 @@ Resources:
       FromPort: 7199
       ToPort: 7199
       SourceSecurityGroupId: !Ref securityGroup
+
+  reaper7199Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 7199
+      ToPort: 7199
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${reaperStackName}-security-group"
 
   port9042securityGroupIngress:
     Type: AWS::EC2::SecurityGroupIngress

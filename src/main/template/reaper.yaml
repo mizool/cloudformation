@@ -1,0 +1,181 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template deploys a Cassandra Reaper stack into an existing VPC.
+
+Parameters:
+  vpcStackName:
+    Description: The name of an existing VPC stack in which a Cassandra cluster will be created.
+    Type: String
+    MinLength: 1
+
+  ami:
+    Description: The AMI used to create Cassandra nodes. By default, Amazon Linux 2 is used.
+    Type: AWS::EC2::Image::Id
+    Default: ami-0f3a43fbf2d3899f7
+
+  keyName:
+    Description: The Key Manager key to be added to the list of allowed keys.
+    Type: AWS::EC2::KeyPair::KeyName
+
+  instanceType:
+    Description: The instance type used for the cassandra nodes.
+    Type: String
+    MinLength: 1
+    Default: t2.small
+
+  authorizedKeys:
+    Description: A URL pointing to a list of authorized SSH keys to be appended as-is to ~/.ssh/authorized_keys.
+    Type: String
+    MinLength: 1
+
+Resources:
+  securityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName} Reaper Security Group
+      GroupDescription: !Sub ${AWS::StackName} Reaper Security Group
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-vpc"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Reaper Security Group
+
+  bastion22Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-bastion-security-group"
+
+  bastion8080Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-bastion-security-group"
+
+  instance:
+    Type: "AWS::EC2::Instance"
+    Properties:
+      ImageId: !Ref ami
+      KeyName: !Ref keyName
+      InstanceType: !Ref instanceType
+      SecurityGroupIds:
+        - !Ref securityGroup
+      SubnetId: !Select
+        - 0
+        - Fn::Split:
+          - ","
+          - Fn::ImportValue:
+              !Sub "${vpcStackName}-private-subnets"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Reaper
+      UserData:
+        Fn::Base64: !Sub |
+           #!/bin/bash -xe
+           yum update -y
+           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource instance --region ${AWS::Region}
+           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource instance --region ${AWS::Region}
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT5M
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          setup:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
+            - "add_reaper_repo"
+            - "install_reaper"
+            - "configure_reaper"
+            - "start_reaper"
+        ssh_keys:
+          files:
+            /home/ec2-user/.ssh/additional_keys:
+              source: !Ref authorizedKeys
+              owner: root
+              group: root
+              mode: "000644"
+          commands:
+            register_additional_keys:
+              command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
+        ntp:
+          packages:
+            yum:
+              ntp: []
+          services:
+            sysvinit:
+              ntpd:
+                enabled: true
+                ensureRunning: true
+                packages:
+                  yum:
+                    - ntp
+        haveged:
+          packages:
+            rpm:
+              haveged: "http://dl.fedoraproject.org/pub/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
+          services:
+            sysvinit:
+              haveged:
+                enabled: true
+                ensureRunning: true
+        openjdk8:
+          packages:
+            yum:
+              java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
+              java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
+        add_reaper_repo:
+          files:
+            /etc/yum.repos.d/bintray-thelastpickle-reaper-rpm.repo:
+              content: |
+                [bintraybintray-thelastpickle-reaper-rpm]
+                name=bintray-thelastpickle-reaper-rpm
+                baseurl=https://dl.bintray.com/thelastpickle/reaper-rpm
+                gpgcheck=0
+                repo_gpgcheck=0
+                enabled=1
+              owner: root
+              group: root
+              mode: "000644"
+        install_reaper:
+          packages:
+            yum:
+              reaper: []
+        configure_reaper:
+          commands:
+            configure_reaper:
+              command: |
+                #!/bin/bash -xe
+                sed -i "/127.0.0.1/c\127.0.0.1 localhost $(curl http://169.254.169.254/latest/meta-data/local-hostname)" /etc/hosts
+                export REAPER_YAML=/etc/cassandra-reaper/cassandra-reaper.yaml
+                rm ${REAPER_YAML}
+                cp /etc/cassandra-reaper/configs/cassandra-reaper-h2.yaml ${REAPER_YAML}
+                mkdir /etc/cassandra-reaper/data
+                chown reaper /etc/cassandra-reaper/data
+                sed -i "/url: jdbc/c\  url: jdbc:h2:\/etc\/cassandra-reaper\/data\/db;MODE=PostgreSQL" ${REAPER_YAML}
+                sed -i "/hangingRepairTimeoutMins: 30/c\hangingRepairTimeoutMins: 120" ${REAPER_YAML}
+        start_reaper:
+          services:
+            sysvinit:
+              cassandra-reaper:
+                enabled: true
+                ensureRunning: true
+
+Outputs:
+  securityGroup:
+    Description: The cassandra reaper security group, so that cassandra security groups can allow ingress from it.
+    Value: !Ref securityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-security-group
