@@ -11,7 +11,7 @@ Parameters:
 
   reaperStackName:
     Description: The name of an existing Cassandra Reaper stack, so that this stack can allow ingress from it.
-      Note that you still need to add this stack manually to the Reaper afterwards.
+      Note that you still need to manually add and configure the nodes of this cluster in Reaper afterwards.
     Type: String
     MinLength: 1
 
