@@ -152,7 +152,7 @@ Resources:
         install_reaper:
           packages:
             yum:
-              reaper: []
+              reaper: [1.4.8]
         configure_reaper:
           commands:
             configure_reaper:
