@@ -1,0 +1,652 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template deploys a Presto cluster connected to a cassandra database.
+
+Parameters:
+  vpcStackName:
+    Description: The name of an existing VPC stack in which Presto will be deployed.
+    Type: String
+    MinLength: 1
+
+  coordinatorInstanceType:
+    Description: The instance type used for the Presto coordinator.
+    Type: String
+    MinLength: 1
+    Default: r5.large
+
+  workerInstanceType:
+    Description: The instance type used for the Presto workers.
+    Type: String
+    MinLength: 1
+    Default: r5.large
+
+  cassandraStackName:
+    Description: The name of an existing Cassandra stack that Presto will get access to.
+    Type: String
+    MinLength: 1
+
+  environmentName:
+    Description: The name of the Presto environment that will be created.
+    Type: String
+    MinLength: 2
+    AllowedPattern: "^[a-z0-9]*$"
+
+  ami:
+    Description: The AMI used to create the instances. By default, Amazon Linux 2 is used.
+    Type: AWS::EC2::Image::Id
+    Default: ami-0f3a43fbf2d3899f7
+
+  keyName:
+    Description: The Key Manager key to be added to the list of allowed keys.
+    Type: AWS::EC2::KeyPair::KeyName
+
+  authorizedKeys:
+    Description: A URL pointing to a list of authorized SSH keys to be appended as-is to ~/.ssh/authorized_keys.
+    Type: String
+    MinLength: 1
+
+  internalDomain:
+    Description: The internal DNS domain name to be used by the Presto cluster. If you run multiple clusters in the
+      same VPC, the internal domain names must be distinct.
+    Type: String
+    MinLength: 1
+    Default: presto
+
+Resources:
+  coordinatorSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName} Coordinator Security Group
+      GroupDescription: !Sub ${AWS::StackName} Coordinator Security Group
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-vpc"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Coordinator Security Group
+
+  workerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName} Worker Security Group
+      GroupDescription: !Sub ${AWS::StackName} Worker Security Group
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-vpc"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Worker Security Group
+
+  bastionCoordinator22Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref coordinatorSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-bastion-security-group"
+
+  bastionWorker22Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref workerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 22
+      ToPort: 22
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-bastion-security-group"
+
+  bastionCoordinator8080Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref coordinatorSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-bastion-security-group"
+
+  coordinatorWorker8080Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref workerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref coordinatorSecurityGroup
+
+  workerCoordinator8080Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref coordinatorSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref workerSecurityGroup
+
+  coordinatorCassandra9042Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Fn::ImportValue:
+          !Sub "${cassandraStackName}-security-group"
+      IpProtocol: tcp
+      FromPort: 9042
+      ToPort: 9042
+      SourceSecurityGroupId: !Ref coordinatorSecurityGroup
+
+  workerCassandra9042Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Fn::ImportValue:
+          !Sub "${cassandraStackName}-security-group"
+      IpProtocol: tcp
+      FromPort: 9042
+      ToPort: 9042
+      SourceSecurityGroupId: !Ref workerSecurityGroup
+
+  coordinatorCassandra9160Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Fn::ImportValue:
+          !Sub "${cassandraStackName}-security-group"
+      IpProtocol: tcp
+      FromPort: 9160
+      ToPort: 9160
+      SourceSecurityGroupId: !Ref coordinatorSecurityGroup
+
+  workerCassandra9160Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId:
+        Fn::ImportValue:
+          !Sub "${cassandraStackName}-security-group"
+      IpProtocol: tcp
+      FromPort: 9160
+      ToPort: 9160
+      SourceSecurityGroupId: !Ref workerSecurityGroup
+
+  hostedZone:
+    Type: AWS::Route53::HostedZone
+    Properties:
+      Name: !Ref internalDomain
+      VPCs:
+        - VPCId:
+            Fn::ImportValue:
+              !Sub "${vpcStackName}-vpc"
+          VPCRegion: !Ref "AWS::Region"
+
+  allowRoute53RecordSetManagementRole:
+    Type: "AWS::IAM::Role"
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - "ec2.amazonaws.com"
+            Action:
+              - "sts:AssumeRole"
+      Path: "/"
+      Policies:
+        - PolicyName: "AllowAllPolicy"
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "route53:GetHostedZone"
+                  - "route53:ListHostedZones"
+                  - "route53:ListResourceRecordSets"
+                  - "route53:ChangeResourceRecordSets"
+                Resource: "*"
+
+  instanceProfile:
+    Type: "AWS::IAM::InstanceProfile"
+    Properties:
+      Path: "/"
+      Roles:
+       - !Ref allowRoute53RecordSetManagementRole
+
+  coordinatorLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref ami
+      KeyName: !Ref keyName
+      InstanceType: !Ref coordinatorInstanceType
+      IamInstanceProfile: !Ref instanceProfile
+      SecurityGroups:
+        - !Ref coordinatorSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+           #!/bin/bash -xe
+           yum update -y
+           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource coordinatorLaunchConfiguration --region ${AWS::Region}
+           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource coordinatorAutoScalingGroup --region ${AWS::Region}
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          setup:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
+            - "aws_cli"
+            - "register_dns"
+            - "download_presto"
+            - "configure_presto"
+            - "start_presto"
+            - "setup_presto_cli"
+        ssh_keys:
+          files:
+            /home/ec2-user/.ssh/additional_keys:
+              source: !Ref authorizedKeys
+              owner: root
+              group: root
+              mode: "000644"
+          commands:
+            register_additional_keys:
+              command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
+        ntp:
+          packages:
+            yum:
+              ntp: []
+          services:
+            sysvinit:
+              ntpd:
+                enabled: true
+                ensureRunning: true
+                packages:
+                  yum:
+                    - ntp
+        haveged:
+          packages:
+            rpm:
+              haveged: "http://dl.fedoraproject.org/pub/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
+          services:
+            sysvinit:
+              haveged:
+                enabled: true
+                ensureRunning: true
+        openjdk8:
+          packages:
+            yum:
+              java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
+              java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
+        aws_cli:
+          files:
+            /home/ec2-user/.aws/config:
+              content: !Sub |
+                [default]
+                region=${AWS::Region}
+                output=json
+              owner: ec2-user
+              group: ec2-user
+              mode: "000644"
+        register_dns:
+          commands:
+            01_create_change_batch:
+              command: !Join
+                - ""
+                - - "echo '{\"Changes\": [{\"Action\": \"UPSERT\", \"ResourceRecordSet\": {\"Name\": \"coordinator."
+                  - !Ref internalDomain
+                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
+            02_register_dns:
+              command: !Join
+                - ""
+                - - "aws route53 change-resource-record-sets --hosted-zone-id "
+                  - !Ref hostedZone
+                  - " --change-batch file:///home/ec2-user/change-batch.json"
+            03_remove_change_batch:
+              command: "rm /home/ec2-user/change-batch.json"
+            04_add_hosts_entry:
+              command: !Join
+                - ""
+                - - "echo \"$(hostname -I) coordinator."
+                  - !Ref internalDomain
+                  - "\" >> /etc/hosts"
+        download_presto:
+          commands:
+            download_presto:
+              command: |
+                #!/bin/bash -xe
+                mkdir /opt/presto
+                wget -q -O - "https://repo1.maven.org/maven2/io/prestosql/presto-server/326/presto-server-326.tar.gz" | tar xvzf - -C /opt/presto
+                mv "/opt/presto/presto-server-326" /opt/presto/presto-server
+                mkdir /var/presto
+                mkdir /var/presto/data
+        configure_presto:
+          files:
+            /opt/presto/presto-server/etc/node.properties:
+              content: |
+                node.data-dir=/var/presto/data
+                node.environment={{nodeEnvironment}}
+              context:
+                nodeEnvironment: !Ref environmentName
+              owner: root
+              group: root
+              mode: "000644"
+            /opt/presto/presto-server/etc/jvm.config:
+              content: |
+                -server
+                -XX:-UseBiasedLocking
+                -XX:+UseG1GC
+                -XX:G1HeapRegionSize=32M
+                -XX:+ExplicitGCInvokesConcurrent
+                -XX:OnOutOfMemoryError="kill -9 %p"
+                -XX:+UseGCOverheadLimit
+                -XX:ReservedCodeCacheSize=512M
+                -Djdk.attach.allowAttachSelf=true
+                -Djdk.nio.maxCachedBufferSize=2000000
+              owner: root
+              group: root
+              mode: "000644"
+            /opt/presto/presto-server/etc/config.properties:
+              content: |
+                http-server.http.port=8080
+                query.max-memory=50GB
+                query.max-memory-per-node=1GB
+                query.max-total-memory-per-node=2GB
+                coordinator=true
+                node-scheduler.include-coordinator=false
+                discovery-server.enabled=true
+                discovery.uri=http://{{discoveryUri}}:8080
+              context:
+                discoveryUri:
+                  Fn::Join:
+                    - ""
+                    - - "coordinator."
+                      - !Ref internalDomain
+              owner: root
+              group: root
+              mode: "000644"
+            /opt/presto/presto-server/etc/catalog/cassandra.properties:
+              content: |
+                connector.name=cassandra
+                cassandra.contact-points={{cassandraContactPoints}}
+                cassandra.consistency-level=LOCAL_QUORUM
+                cassandra.client.read-timeout=2m
+              context:
+                cassandraContactPoints:
+                  Fn::ImportValue:
+                    !Sub "${cassandraStackName}-seed-nodes"
+              owner: root
+              group: root
+              mode: "000644"
+          commands:
+            patch_jvm_config:
+              command: |
+                export SYSTEM_MEMORY_IN_MB=`free -m | awk '/:/ {print $2;exit}'`
+                export HEAP_SIZE=`expr $SYSTEM_MEMORY_IN_MB / 4 \* 3`
+                echo "-Xms${HEAP_SIZE}M" >> /opt/presto/presto-server/etc/jvm.config
+                echo "-Xmx${HEAP_SIZE}M" >> /opt/presto/presto-server/etc/jvm.config
+            patch_node_properties:
+              command: |
+                export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+                echo "node.id=${INSTANCE_ID}" >> /opt/presto/presto-server/etc/node.properties
+        start_presto:
+          files:
+            /home/ec2-user/run-presto.sh:
+              content: !Sub |
+                #!/bin/bash -xe
+                /opt/presto/presto-server/bin/launcher run
+                shutdown
+              owner: root
+              group: root
+              mode: "000755"
+          commands:
+            run_presto:
+              command: nohup /home/ec2-user/run-presto.sh &>/dev/null &
+        setup_presto_cli:
+          commands:
+            setup_presto_cli:
+              command: |
+                #!/bin/bash -xe
+                mkdir /opt/presto/presto-cli
+                wget -O /opt/presto/presto-cli/presto-cli-executable.jar "https://repo1.maven.org/maven2/io/prestosql/presto-cli/326/presto-cli-326-executable.jar"
+                chmod +x /opt/presto/presto-cli/presto-cli-executable.jar
+                ln -s /opt/presto/presto-cli/presto-cli-executable.jar /bin/presto
+
+  workerLaunchConfiguration:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    Properties:
+      ImageId: !Ref ami
+      KeyName: !Ref keyName
+      InstanceType: !Ref workerInstanceType
+      SecurityGroups:
+        - !Ref workerSecurityGroup
+      UserData:
+        Fn::Base64: !Sub |
+           #!/bin/bash -xe
+           yum update -y
+           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource workerLaunchConfiguration --region ${AWS::Region}
+           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource workerAutoScalingGroup --region ${AWS::Region}
+    Metadata:
+      AWS::CloudFormation::Init:
+        configSets:
+          setup:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
+            - "download_presto"
+            - "configure_presto"
+            - "start_presto"
+        ssh_keys:
+          files:
+            /home/ec2-user/.ssh/additional_keys:
+              source: !Ref authorizedKeys
+              owner: root
+              group: root
+              mode: "000644"
+          commands:
+            register_additional_keys:
+              command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
+        ntp:
+          packages:
+            yum:
+              ntp: []
+          services:
+            sysvinit:
+              ntpd:
+                enabled: true
+                ensureRunning: true
+                packages:
+                  yum:
+                    - ntp
+        haveged:
+          packages:
+            rpm:
+              haveged: "http://dl.fedoraproject.org/pub/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
+          services:
+            sysvinit:
+              haveged:
+                enabled: true
+                ensureRunning: true
+        openjdk8:
+          packages:
+            yum:
+              java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
+              java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
+        download_presto:
+          commands:
+            download_presto:
+              command: |
+                #!/bin/bash -xe
+                mkdir /opt/presto
+                wget -q -O - "https://repo1.maven.org/maven2/io/prestosql/presto-server/326/presto-server-326.tar.gz" | tar xvzf - -C /opt/presto
+                mv "/opt/presto/presto-server-326" /opt/presto/presto-server
+                mkdir /var/presto
+                mkdir /var/presto/data
+        configure_presto:
+          files:
+            /opt/presto/presto-server/etc/node.properties:
+              content: |
+                node.data-dir=/var/presto/data
+                node.environment={{nodeEnvironment}}
+              context:
+                nodeEnvironment: !Ref environmentName
+              owner: root
+              group: root
+              mode: "000644"
+            /opt/presto/presto-server/etc/jvm.config:
+              content: |
+                -server
+                -XX:-UseBiasedLocking
+                -XX:+UseG1GC
+                -XX:G1HeapRegionSize=32M
+                -XX:+ExplicitGCInvokesConcurrent
+                -XX:OnOutOfMemoryError="kill -9 %p"
+                -XX:+UseGCOverheadLimit
+                -XX:ReservedCodeCacheSize=512M
+                -Djdk.attach.allowAttachSelf=true
+                -Djdk.nio.maxCachedBufferSize=2000000
+              owner: root
+              group: root
+              mode: "000644"
+            /opt/presto/presto-server/etc/config.properties:
+              content: |
+                http-server.http.port=8080
+                query.max-memory=50GB
+                query.max-memory-per-node=1GB
+                query.max-total-memory-per-node=2GB
+                coordinator=false
+                discovery.uri=http://{{discoveryUri}}:8080
+              context:
+                discoveryUri:
+                  Fn::Join:
+                    - ""
+                    - - "coordinator."
+                      - !Ref internalDomain
+              owner: root
+              group: root
+              mode: "000644"
+            /opt/presto/presto-server/etc/catalog/cassandra.properties:
+              content: |
+                connector.name=cassandra
+                cassandra.contact-points={{cassandraContactPoints}}
+                cassandra.consistency-level=LOCAL_QUORUM
+                cassandra.client.read-timeout=2m
+              context:
+                cassandraContactPoints:
+                  Fn::ImportValue:
+                    !Sub "${cassandraStackName}-seed-nodes"
+              owner: root
+              group: root
+              mode: "000644"
+          commands:
+            patch_jvm_config:
+              command: |
+                export SYSTEM_MEMORY_IN_MB=`free -m | awk '/:/ {print $2;exit}'`
+                export HEAP_SIZE=`expr $SYSTEM_MEMORY_IN_MB / 4 \* 3`
+                echo "-Xms${HEAP_SIZE}M" >> /opt/presto/presto-server/etc/jvm.config
+                echo "-Xmx${HEAP_SIZE}M" >> /opt/presto/presto-server/etc/jvm.config
+            patch_node_properties:
+              command: |
+                export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+                echo "node.id=${INSTANCE_ID}" >> /opt/presto/presto-server/etc/node.properties
+        start_presto:
+          files:
+            /home/ec2-user/run-presto.sh:
+              content: !Sub |
+                #!/bin/bash -xe
+                /opt/presto/presto-server/bin/launcher run
+                shutdown
+              owner: root
+              group: root
+              mode: "000755"
+          commands:
+            run_presto:
+              command: nohup /home/ec2-user/run-presto.sh &>/dev/null &
+
+  coordinatorAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchConfigurationName: !Ref coordinatorLaunchConfiguration
+      MaxSize: 2
+      MinSize: 1
+      DesiredCapacity: 1
+      VPCZoneIdentifier:
+        - Fn::Select:
+          - 0
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+        - Fn::Select:
+          - 1
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+        - Fn::Select:
+          - 2
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Coordinator
+          PropagateAtLaunch: true
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT5M
+
+  workerAutoScalingGroup:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      LaunchConfigurationName: !Ref workerLaunchConfiguration
+      MaxSize: 20
+      MinSize: 1
+      DesiredCapacity: 1
+      VPCZoneIdentifier:
+        - Fn::Select:
+          - 0
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+        - Fn::Select:
+          - 1
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+        - Fn::Select:
+          - 2
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Worker
+          PropagateAtLaunch: true
+    CreationPolicy:
+      ResourceSignal:
+        Timeout: PT5M
+
+Outputs:
+  SecurityGroup:
+    Description: The presto coordinator security group, so that other security groups can allow ingress from themselves
+      to it.
+    Value: !Ref coordinatorSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-security-group
+
+  DnsName:
+    Description: The DNS name under which the presto coordinator is reachable.
+    Value:
+      Fn::Join:
+        - ""
+        - - "coordinator."
+          - !Ref internalDomain
+    Export:
+      Name: !Sub ${AWS::StackName}-dns-name
