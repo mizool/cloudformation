@@ -1,0 +1,80 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template deploys an ElastiCache managed Redis.
+
+Parameters:
+  vpcStackName:
+    Description: The name of an existing VPC stack in which Redis will be deployed.
+    Type: String
+    MinLength: 1
+
+  instanceType:
+    Description: The instance type used for the Redis.
+    Type: String
+    MinLength: 1
+    Default: cache.t2.micro
+
+Resources:
+  securityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName} Security Group
+      GroupDescription: !Sub ${AWS::StackName} Security Group
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-vpc"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Security Group
+
+  subnetGroup:
+    Type: "AWS::ElastiCache::SubnetGroup"
+    Properties:
+      Description: !Sub ${AWS::StackName}-redis-subnet-group
+      SubnetIds:
+        - !Select
+          - 0
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+        - !Select
+          - 1
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+        - !Select
+          - 2
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+
+  cacheCluster:
+    Type: AWS::ElastiCache::CacheCluster
+    Properties:
+      ClusterName: !Sub ${AWS::StackName}-redis-cache-cluster
+      AutoMinorVersionUpgrade: true
+      Engine: redis
+      CacheNodeType: !Ref instanceType
+      CacheSubnetGroupName: !Ref subnetGroup
+      NumCacheNodes: 1
+      VpcSecurityGroupIds:
+        - Fn::GetAtt:
+          - securityGroup
+          - GroupId
+
+Outputs:
+  SecurityGroup:
+    Description: The redis security group, so that other security groups can allow ingress from themselves to it.
+    Value: !Ref securityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-security-group
+
+  DnsName:
+    Description: The redis DNS name.
+    Value: !GetAtt
+      - cacheCluster
+      - RedisEndpoint.Address
+    Export:
+      Name: !Sub ${AWS::StackName}-redis-dns-name

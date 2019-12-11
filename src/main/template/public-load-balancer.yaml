@@ -1,0 +1,88 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template deploys an application load balancer that is reachable from the internet.
+
+Parameters:
+  vpcStackName:
+    Description: The name of an existing VPC stack in which the load balancer will be deployed.
+    Type: String
+    MinLength: 1
+
+Resources:
+  securityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName} Security Group
+      GroupDescription: !Sub ${AWS::StackName} Security Group
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-vpc"
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Security Group
+
+  loadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref securityGroup
+      Name: !Sub ${AWS::StackName}-public-lb
+      Subnets:
+        - !Select
+          - 0
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-public-subnets"
+        - !Select
+          - 1
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-public-subnets"
+        - !Select
+          - 2
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-public-subnets"
+
+  listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            ContentType: application/json
+            StatusCode: 404
+            MessageBody: "{\"errors\":{\"GLOBAL\":[{\"errorId\":\"com.github.mizool.core.exception.ObjectNotFoundException\",\"parameters\":{\"source\":\"LoadBalancer\"}}]}}"
+      LoadBalancerArn: !Ref loadBalancer
+      Port: 80
+      Protocol: HTTP
+
+Outputs:
+  SecurityGroup:
+    Description: The public load balancer security group, so that other security groups can allow ingress from it.
+    Value: !Ref securityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-security-group
+
+  DNSName:
+    Description: The load balancer DNS name.
+    Value: !GetAtt
+      - loadBalancer
+      - DNSName
+    Export:
+      Name: !Sub ${AWS::StackName}-public-lb-dns-name
+
+  Listener:
+    Description: The public load balancer listener, so that listener rules can be registered to it.
+    Value: !Ref listener
+    Export:
+      Name: !Sub ${AWS::StackName}-public-lb-listener

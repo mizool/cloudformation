@@ -1,0 +1,124 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: This template deploys an application load balancer that is not reachable from the internet.
+
+Parameters:
+  vpcStackName:
+    Description: The name of an existing VPC stack in which the load balancer will be deployed.
+    Type: String
+    MinLength: 1
+
+Resources:
+  securityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName} Security Group
+      GroupDescription: !Sub ${AWS::StackName} Security Group
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-vpc"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Security Group
+
+  bastion80Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-bastion-security-group"
+
+  bastion8080Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-bastion-security-group"
+
+  loadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Type: application
+      Scheme: internal
+      SecurityGroups:
+        - !Ref securityGroup
+      Name: !Sub ${AWS::StackName}-private-lb
+      Subnets:
+        - !Select
+          - 0
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+        - !Select
+          - 1
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+        - !Select
+          - 2
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                !Sub "${vpcStackName}-private-subnets"
+
+  listener80:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            ContentType: application/json
+            StatusCode: 404
+            MessageBody: "{\"errors\":{\"GLOBAL\":[{\"errorId\":\"com.github.mizool.core.exception.ObjectNotFoundException\",\"parameters\":{\"source\":\"LoadBalancer\"}}]}}"
+      LoadBalancerArn: !Ref loadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  listener8080:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: fixed-response
+          FixedResponseConfig:
+            ContentType: application/json
+            StatusCode: 404
+            MessageBody: "{\"errors\":{\"GLOBAL\":[{\"errorId\":\"com.github.mizool.core.exception.ObjectNotFoundException\",\"parameters\":{\"source\":\"LoadBalancer\"}}]}}"
+      LoadBalancerArn: !Ref loadBalancer
+      Port: 8080
+      Protocol: HTTP
+
+Outputs:
+  SecurityGroup:
+    Description: The private load balancer security group, so that other security groups can allow ingress from it.
+    Value: !Ref securityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-security-group
+
+  DnsName:
+    Description: The load balancer DNS name.
+    Value: !GetAtt
+      - loadBalancer
+      - DNSName
+    Export:
+      Name: !Sub ${AWS::StackName}-private-lb-dns-name
+
+  Listener80:
+    Description: The port 80 private load balancer listener, so that listener rules can be registered to it.
+    Value: !Ref listener80
+    Export:
+      Name: !Sub ${AWS::StackName}-private-lb-listener80
+
+  Listener8080:
+    Description: The port 8080 private load balancer listener, so that listener rules can be registered to it.
+    Value: !Ref listener8080
+    Export:
+      Name: !Sub ${AWS::StackName}-private-lb-listener8080
