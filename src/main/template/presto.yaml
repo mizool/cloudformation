@@ -225,7 +225,7 @@ Resources:
         - !Ref coordinatorSecurityGroup
       UserData:
         Fn::Base64: !Sub |
-           #!/bin/bash -xe
+           #!/bin/bash -x
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource coordinatorLaunchConfiguration --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource coordinatorAutoScalingGroup --region ${AWS::Region}
@@ -423,7 +423,7 @@ Resources:
         - !Ref workerSecurityGroup
       UserData:
         Fn::Base64: !Sub |
-           #!/bin/bash -xe
+           #!/bin/bash -x
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource workerLaunchConfiguration --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource workerAutoScalingGroup --region ${AWS::Region}
