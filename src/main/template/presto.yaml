@@ -394,9 +394,9 @@ Resources:
           files:
             /home/ec2-user/run-presto.sh:
               content: !Sub |
-                #!/bin/bash -xe
+                #!/bin/bash -x
                 /opt/presto/presto-server/bin/launcher run
-                shutdown
+                shutdown -h now
               owner: root
               group: root
               mode: "000755"
@@ -555,9 +555,9 @@ Resources:
           files:
             /home/ec2-user/run-presto.sh:
               content: !Sub |
-                #!/bin/bash -xe
+                #!/bin/bash -x
                 /opt/presto/presto-server/bin/launcher run
-                shutdown
+                shutdown -h now
               owner: root
               group: root
               mode: "000755"
