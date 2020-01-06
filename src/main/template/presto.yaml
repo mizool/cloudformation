@@ -127,6 +127,15 @@ Resources:
       ToPort: 8080
       SourceSecurityGroupId: !Ref workerSecurityGroup
 
+  workerWorker8080Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref workerSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref workerSecurityGroup
+
   coordinatorCassandra9042Ingress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
@@ -394,9 +403,9 @@ Resources:
           files:
             /home/ec2-user/run-presto.sh:
               content: !Sub |
-                #!/bin/bash -xe
+                #!/bin/bash -x
                 /opt/presto/presto-server/bin/launcher run
-                shutdown
+                shutdown -h now
               owner: root
               group: root
               mode: "000755"
@@ -555,9 +564,9 @@ Resources:
           files:
             /home/ec2-user/run-presto.sh:
               content: !Sub |
-                #!/bin/bash -xe
+                #!/bin/bash -x
                 /opt/presto/presto-server/bin/launcher run
-                shutdown
+                shutdown -h now
               owner: root
               group: root
               mode: "000755"
