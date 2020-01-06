@@ -30,10 +30,16 @@ Parameters:
     MinLength: 2
     AllowedPattern: "^[a-z0-9]*$"
 
-  ami:
-    Description: The AMI used to create the instances. By default, Amazon Linux 2 is used.
-    Type: AWS::EC2::Image::Id
-    Default: ami-0f3a43fbf2d3899f7
+  papertrailHost:
+    Description: The host name of the papertrail log destination to use by the application.
+    Type: String
+    MinLength: 1
+
+  papertrailPort:
+    Description: The port of the papertrail log destination to use by the application.
+    Type: Number
+    MinValue: 1
+    MaxValue: 65535
 
   keyName:
     Description: The Key Manager key to be added to the list of allowed keys.
@@ -50,6 +56,13 @@ Parameters:
     Type: String
     MinLength: 1
     Default: presto
+
+Mappings:
+  Regions:
+    eu-central-1:
+      AmazonLinux2Ami: ami-0f3a43fbf2d3899f7
+    eu-west-1:
+      AmazonLinux2Ami: ami-01f14919ba412de34
 
 Resources:
   coordinatorSecurityGroup:
@@ -122,6 +135,15 @@ Resources:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
       GroupId: !Ref coordinatorSecurityGroup
+      IpProtocol: tcp
+      FromPort: 8080
+      ToPort: 8080
+      SourceSecurityGroupId: !Ref workerSecurityGroup
+
+  workerWorker8080Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref workerSecurityGroup
       IpProtocol: tcp
       FromPort: 8080
       ToPort: 8080
@@ -217,7 +239,10 @@ Resources:
   coordinatorLaunchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
-      ImageId: !Ref ami
+      ImageId: !FindInMap
+        - Regions
+        - !Ref AWS::Region
+        - AmazonLinux2Ami
       KeyName: !Ref keyName
       InstanceType: !Ref coordinatorInstanceType
       IamInstanceProfile: !Ref instanceProfile
@@ -225,7 +250,7 @@ Resources:
         - !Ref coordinatorSecurityGroup
       UserData:
         Fn::Base64: !Sub |
-           #!/bin/bash -xe
+           #!/bin/bash -x
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource coordinatorLaunchConfiguration --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource coordinatorAutoScalingGroup --region ${AWS::Region}
@@ -241,6 +266,7 @@ Resources:
             - "register_dns"
             - "download_presto"
             - "configure_presto"
+            - "setup_remote_syslog"
             - "start_presto"
             - "setup_presto_cli"
         ssh_keys:
@@ -366,6 +392,12 @@ Resources:
               owner: root
               group: root
               mode: "000644"
+            /opt/presto/presto-server/etc/log.properties:
+              content: |
+                io.prestosql=WARN
+              owner: root
+              group: root
+              mode: "000644"
             /opt/presto/presto-server/etc/catalog/cassandra.properties:
               content: |
                 connector.name=cassandra
@@ -390,19 +422,49 @@ Resources:
               command: |
                 export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
                 echo "node.id=${INSTANCE_ID}" >> /opt/presto/presto-server/etc/node.properties
+        setup_remote_syslog:
+          files:
+            /etc/log_files.yml:
+              content: |
+                files:
+                  - /var/presto/data/var/log/presto
+                destination:
+                  host: {{papertrailHost}}
+                  port: {{papertrailPort}}
+                  protocol: tls
+              context:
+                papertrailHost: !Ref papertrailHost
+                papertrailPort: !Ref papertrailPort
+              owner: root
+              group: root
+              mode: "000644"
+          commands:
+            01_download_remote_syslog:
+              command: |
+                #!/bin/bash -xe
+                wget -q -O - "https://github.com/papertrail/remote_syslog2/releases/download/v0.20/remote_syslog_linux_amd64.tar.gz" | tar xvzf - -C /etc
+            02_patch_log_files_yml:
+              command: |
+                export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+                echo "hostname: presto-coordinator-${INSTANCE_ID}" >> /etc/log_files.yml
         start_presto:
           files:
             /home/ec2-user/run-presto.sh:
               content: !Sub |
-                #!/bin/bash -xe
+                #!/bin/bash -x
+                /etc/remote_syslog/remote_syslog
                 /opt/presto/presto-server/bin/launcher run
-                shutdown
+                shutdown -h now
               owner: root
               group: root
               mode: "000755"
           commands:
             run_presto:
-              command: nohup /home/ec2-user/run-presto.sh &>/dev/null &
+              command: |
+                mkdir /var/presto/data/var
+                mkdir /var/presto/data/var/log
+                touch /var/presto/data/var/log/presto
+                nohup /home/ec2-user/run-presto.sh &>/var/presto/data/var/log/presto &
         setup_presto_cli:
           commands:
             setup_presto_cli:
@@ -416,14 +478,17 @@ Resources:
   workerLaunchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
-      ImageId: !Ref ami
+      ImageId: !FindInMap
+        - Regions
+        - !Ref AWS::Region
+        - AmazonLinux2Ami
       KeyName: !Ref keyName
       InstanceType: !Ref workerInstanceType
       SecurityGroups:
         - !Ref workerSecurityGroup
       UserData:
         Fn::Base64: !Sub |
-           #!/bin/bash -xe
+           #!/bin/bash -x
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource workerLaunchConfiguration --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource workerAutoScalingGroup --region ${AWS::Region}
@@ -437,6 +502,7 @@ Resources:
             - "openjdk8"
             - "download_presto"
             - "configure_presto"
+            - "setup_remote_syslog"
             - "start_presto"
         ssh_keys:
           files:
@@ -527,6 +593,12 @@ Resources:
               owner: root
               group: root
               mode: "000644"
+            /opt/presto/presto-server/etc/log.properties:
+              content: |
+                io.prestosql=WARN
+              owner: root
+              group: root
+              mode: "000644"
             /opt/presto/presto-server/etc/catalog/cassandra.properties:
               content: |
                 connector.name=cassandra
@@ -551,19 +623,49 @@ Resources:
               command: |
                 export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
                 echo "node.id=${INSTANCE_ID}" >> /opt/presto/presto-server/etc/node.properties
+        setup_remote_syslog:
+          files:
+            /etc/log_files.yml:
+              content: |
+                files:
+                  - /var/presto/data/var/log/presto
+                destination:
+                  host: {{papertrailHost}}
+                  port: {{papertrailPort}}
+                  protocol: tls
+              context:
+                papertrailHost: !Ref papertrailHost
+                papertrailPort: !Ref papertrailPort
+              owner: root
+              group: root
+              mode: "000644"
+          commands:
+            01_download_remote_syslog:
+              command: |
+                #!/bin/bash -xe
+                wget -q -O - "https://github.com/papertrail/remote_syslog2/releases/download/v0.20/remote_syslog_linux_amd64.tar.gz" | tar xvzf - -C /etc
+            02_patch_log_files_yml:
+              command: |
+                export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+                echo "hostname: presto-worker-${INSTANCE_ID}" >> /etc/log_files.yml
         start_presto:
           files:
             /home/ec2-user/run-presto.sh:
               content: !Sub |
-                #!/bin/bash -xe
+                #!/bin/bash -x
+                /etc/remote_syslog/remote_syslog
                 /opt/presto/presto-server/bin/launcher run
-                shutdown
+                shutdown -h now
               owner: root
               group: root
               mode: "000755"
           commands:
             run_presto:
-              command: nohup /home/ec2-user/run-presto.sh &>/dev/null &
+              command: |
+                mkdir /var/presto/data/var
+                mkdir /var/presto/data/var/log
+                touch /var/presto/data/var/log/presto
+                nohup /home/ec2-user/run-presto.sh &>/var/presto/data/var/log/presto &
 
   coordinatorAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup

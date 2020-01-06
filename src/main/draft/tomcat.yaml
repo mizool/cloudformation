@@ -56,11 +56,6 @@ Parameters:
     MinLength: 1
     Default: t2.small
 
-  ami:
-    Description: The AMI used to create the instances. By default, Amazon Linux 2 is used.
-    Type: AWS::EC2::Image::Id
-    Default: ami-0f3a43fbf2d3899f7
-
   keyName:
     Description: The Key Manager key to be added to the list of allowed keys.
     Type: AWS::EC2::KeyPair::KeyName
@@ -71,6 +66,12 @@ Parameters:
     MinLength: 1
 
 Mappings:
+  Regions:
+    eu-central-1:
+      AmazonLinux2Ami: ami-0f3a43fbf2d3899f7
+    eu-west-1:
+      AmazonLinux2Ami: ami-01f14919ba412de34
+
   Scripts:
     Tomcat:
       InstallTomcat: |
@@ -225,7 +226,10 @@ Resources:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
       AssociatePublicIpAddress: False
-      ImageId: !Ref ami
+      ImageId: !FindInMap
+        - Regions
+        - !Ref AWS::Region
+        - AmazonLinux2Ami
       IamInstanceProfile: !Ref instanceProfile
       InstanceType: !Ref instanceType
       KeyName: !Ref keyName
@@ -233,7 +237,7 @@ Resources:
         - !Ref securityGroup
       UserData:
         Fn::Base64: !Sub |
-           #!/bin/bash -xe
+           #!/bin/bash -x
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource launchConfiguration --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource autoScalingGroup --region ${AWS::Region}

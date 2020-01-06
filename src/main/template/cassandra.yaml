@@ -15,11 +15,6 @@ Parameters:
     Type: String
     MinLength: 1
 
-  ami:
-    Description: The AMI used to create Cassandra nodes. By default, Amazon Linux 2 is used.
-    Type: AWS::EC2::Image::Id
-    Default: ami-0f3a43fbf2d3899f7
-
   keyName:
     Description: The Key Manager key to be added to the list of allowed keys.
     Type: AWS::EC2::KeyPair::KeyName
@@ -66,6 +61,12 @@ Parameters:
     Default: "true"
 
 Mappings:
+  Regions:
+    eu-central-1:
+      AmazonLinux2Ami: ami-0f3a43fbf2d3899f7
+    eu-west-1:
+      AmazonLinux2Ami: ami-01f14919ba412de34
+
   Scripts:
     Cassandra:
       CreateHostsEntry: |
@@ -278,7 +279,10 @@ Resources:
   seedA:
     Type: "AWS::EC2::Instance"
     Properties:
-      ImageId: !Ref ami
+      ImageId: !FindInMap
+        - Regions
+        - !Ref AWS::Region
+        - AmazonLinux2Ami
       KeyName: !Ref keyName
       InstanceType: !Ref instanceType
       IamInstanceProfile: !Ref instanceProfile
@@ -306,7 +310,7 @@ Resources:
           Value: !Sub ${AWS::StackName} Seed A
       UserData:
         Fn::Base64: !Sub |
-           #!/bin/bash -xe
+           #!/bin/bash -x
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource seedA --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedA --region ${AWS::Region}
@@ -485,7 +489,10 @@ Resources:
   seedB:
     Type: "AWS::EC2::Instance"
     Properties:
-      ImageId: !Ref ami
+      ImageId: !FindInMap
+        - Regions
+        - !Ref AWS::Region
+        - AmazonLinux2Ami
       KeyName: !Ref keyName
       InstanceType: !Ref instanceType
       IamInstanceProfile: !Ref instanceProfile
@@ -513,7 +520,7 @@ Resources:
           Value: !Sub ${AWS::StackName} Seed B
       UserData:
         Fn::Base64: !Sub |
-           #!/bin/bash -xe
+           #!/bin/bash -x
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource seedB --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedB --region ${AWS::Region}
@@ -692,7 +699,10 @@ Resources:
   seedC:
     Type: "AWS::EC2::Instance"
     Properties:
-      ImageId: !Ref ami
+      ImageId: !FindInMap
+        - Regions
+        - !Ref AWS::Region
+        - AmazonLinux2Ami
       KeyName: !Ref keyName
       InstanceType: !Ref instanceType
       IamInstanceProfile: !Ref instanceProfile
@@ -720,7 +730,7 @@ Resources:
           Value: !Sub ${AWS::StackName} Seed C
       UserData:
         Fn::Base64: !Sub |
-           #!/bin/bash -xe
+           #!/bin/bash -x
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource seedC --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedC --region ${AWS::Region}
@@ -899,7 +909,10 @@ Resources:
   launchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
-      ImageId: !Ref ami
+      ImageId: !FindInMap
+        - Regions
+        - !Ref AWS::Region
+        - AmazonLinux2Ami
       IamInstanceProfile: !Ref instanceProfile
       KeyName: !Ref keyName
       InstanceType: !Ref instanceType
@@ -918,7 +931,7 @@ Resources:
             DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
       UserData:
         Fn::Base64: !Sub |
-           #!/bin/bash -xe
+           #!/bin/bash -x
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource launchConfiguration --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource autoScalingGroup --region ${AWS::Region}
@@ -1035,7 +1048,7 @@ Resources:
       LaunchConfigurationName: !Ref launchConfiguration
       MaxSize: 30
       MinSize: 0
-      DesiredCapacity: 1
+      DesiredCapacity: 0
       VPCZoneIdentifier:
         - Fn::Select:
           - 0
