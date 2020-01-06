@@ -22,11 +22,6 @@ Parameters:
     Type: String
     Default: 12
 
-  bastionAmi:
-    Description: The AMI used to create the bastion jump host. By default, Amazon Linux 2 is used.
-    Type: AWS::EC2::Image::Id
-    Default: ami-0f3a43fbf2d3899f7
-
   keyName:
     Description: The Key Manager key to be added to the list of allowed keys.
     Type: AWS::EC2::KeyPair::KeyName
@@ -40,6 +35,13 @@ Parameters:
     Description: A URL pointing to a list of authorized SSH keys to be appended as-is to ~/.ssh/authorized_keys.
     Type: String
     MinLength: 1
+
+Mappings:
+  Regions:
+    eu-central-1:
+      AmazonLinux2Ami: ami-0f3a43fbf2d3899f7
+    eu-west-1:
+      AmazonLinux2Ami: ami-01f14919ba412de34
 
 Resources:
   vpc:
@@ -347,7 +349,10 @@ Resources:
   bastionLaunchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
-      ImageId: !Ref bastionAmi
+      ImageId: !FindInMap
+        - Regions
+        - !Ref AWS::Region
+        - AmazonLinux2Ami
       KeyName: !Ref keyName
       InstanceType: !Ref bastionInstanceType
       SecurityGroups:

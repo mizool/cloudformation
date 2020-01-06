@@ -41,11 +41,6 @@ Parameters:
     MinValue: 1
     MaxValue: 65535
 
-  ami:
-    Description: The AMI used to create the instances. By default, Amazon Linux 2 is used.
-    Type: AWS::EC2::Image::Id
-    Default: ami-0f3a43fbf2d3899f7
-
   keyName:
     Description: The Key Manager key to be added to the list of allowed keys.
     Type: AWS::EC2::KeyPair::KeyName
@@ -61,6 +56,13 @@ Parameters:
     Type: String
     MinLength: 1
     Default: presto
+
+Mappings:
+  Regions:
+    eu-central-1:
+      AmazonLinux2Ami: ami-0f3a43fbf2d3899f7
+    eu-west-1:
+      AmazonLinux2Ami: ami-01f14919ba412de34
 
 Resources:
   coordinatorSecurityGroup:
@@ -237,7 +239,10 @@ Resources:
   coordinatorLaunchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
-      ImageId: !Ref ami
+      ImageId: !FindInMap
+        - Regions
+        - !Ref AWS::Region
+        - AmazonLinux2Ami
       KeyName: !Ref keyName
       InstanceType: !Ref coordinatorInstanceType
       IamInstanceProfile: !Ref instanceProfile
@@ -473,7 +478,10 @@ Resources:
   workerLaunchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
-      ImageId: !Ref ami
+      ImageId: !FindInMap
+        - Regions
+        - !Ref AWS::Region
+        - AmazonLinux2Ami
       KeyName: !Ref keyName
       InstanceType: !Ref workerInstanceType
       SecurityGroups:
