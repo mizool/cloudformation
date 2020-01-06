@@ -1035,7 +1035,7 @@ Resources:
       LaunchConfigurationName: !Ref launchConfiguration
       MaxSize: 30
       MinSize: 0
-      DesiredCapacity: 1
+      DesiredCapacity: 0
       VPCZoneIdentifier:
         - Fn::Select:
           - 0
