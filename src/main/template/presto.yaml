@@ -41,6 +41,13 @@ Parameters:
     MinValue: 1
     MaxValue: 65535
 
+  numberOfWorkers:
+    Description: How many worker nodes shall initially be started.
+    Type: Number
+    Default: 1
+    MinValue: 1
+    MaxValue: 100
+
   keyName:
     Description: The Key Manager key to be added to the list of allowed keys.
     Type: AWS::EC2::KeyPair::KeyName
@@ -251,6 +258,7 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
            #!/bin/bash -x
+           echo "${project.version} - ${timestamp}"
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource coordinatorLaunchConfiguration --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource coordinatorAutoScalingGroup --region ${AWS::Region}
@@ -416,7 +424,6 @@ Resources:
               command: |
                 export SYSTEM_MEMORY_IN_MB=`free -m | awk '/:/ {print $2;exit}'`
                 export HEAP_SIZE=`expr $SYSTEM_MEMORY_IN_MB / 4 \* 3`
-                echo "-Xms${HEAP_SIZE}M" >> /opt/presto/presto-server/etc/jvm.config
                 echo "-Xmx${HEAP_SIZE}M" >> /opt/presto/presto-server/etc/jvm.config
             patch_node_properties:
               command: |
@@ -489,6 +496,7 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
            #!/bin/bash -x
+           echo "${project.version} - ${timestamp}"
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource workerLaunchConfiguration --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource workerAutoScalingGroup --region ${AWS::Region}
@@ -617,7 +625,6 @@ Resources:
               command: |
                 export SYSTEM_MEMORY_IN_MB=`free -m | awk '/:/ {print $2;exit}'`
                 export HEAP_SIZE=`expr $SYSTEM_MEMORY_IN_MB / 4 \* 3`
-                echo "-Xms${HEAP_SIZE}M" >> /opt/presto/presto-server/etc/jvm.config
                 echo "-Xmx${HEAP_SIZE}M" >> /opt/presto/presto-server/etc/jvm.config
             patch_node_properties:
               command: |
@@ -700,14 +707,18 @@ Resources:
     CreationPolicy:
       ResourceSignal:
         Timeout: PT5M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        WaitOnResourceSignals: true
 
   workerAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
     Properties:
       LaunchConfigurationName: !Ref workerLaunchConfiguration
-      MaxSize: 20
+      MaxSize: 100
       MinSize: 1
-      DesiredCapacity: 1
+      DesiredCapacity: !Ref numberOfWorkers
       VPCZoneIdentifier:
         - Fn::Select:
           - 0
@@ -734,6 +745,10 @@ Resources:
     CreationPolicy:
       ResourceSignal:
         Timeout: PT5M
+    UpdatePolicy:
+      AutoScalingRollingUpdate:
+        MinInstancesInService: 1
+        WaitOnResourceSignals: true
 
 Outputs:
   SecurityGroup:

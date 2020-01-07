@@ -49,6 +49,7 @@
     <properties>
         <encoding>UTF-8</encoding>
         <project.build.sourceEncoding>${encoding}</project.build.sourceEncoding>
+        <timestamp>${maven.build.timestamp}</timestamp>
     </properties>
 
     <build>
@@ -75,6 +76,39 @@
                                 <goal>sort</goal>
                             </goals>
                             <phase>verify</phase>
+                        </execution>
+                    </executions>
+                </plugin>
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-assembly-plugin</artifactId>
+                    <version>2.4</version>
+                    <executions>
+                        <execution>
+                            <id>distribution</id>
+                            <goals>
+                                <goal>single</goal>
+                            </goals>
+                            <phase>package</phase>
+                            <configuration>
+                                <tarLongFileMode>gnu</tarLongFileMode>
+                                <descriptors>
+                                    <descriptor>src/main/assembly/distribution.xml</descriptor>
+                                </descriptors>
+                            </configuration>
+                        </execution>
+                        <execution>
+                            <id>local-testing-directory</id>
+                            <goals>
+                                <goal>single</goal>
+                            </goals>
+                            <phase>package</phase>
+                            <configuration>
+                                <attach>false</attach>
+                                <descriptors>
+                                    <descriptor>src/main/assembly/local-testing-directory.xml</descriptor>
+                                </descriptors>
+                            </configuration>
                         </execution>
                     </executions>
                 </plugin>
@@ -109,6 +143,10 @@
             <plugin>
                 <groupId>com.google.code.sortpom</groupId>
                 <artifactId>maven-sortpom-plugin</artifactId>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-assembly-plugin</artifactId>
             </plugin>
             <plugin>
                 <groupId>org.sonatype.plugins</groupId>

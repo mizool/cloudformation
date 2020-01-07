@@ -311,6 +311,7 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
            #!/bin/bash -x
+           echo "${project.version} - ${timestamp}"
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource seedA --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedA --region ${AWS::Region}
@@ -521,6 +522,7 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
            #!/bin/bash -x
+           echo "${project.version} - ${timestamp}"
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource seedB --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedB --region ${AWS::Region}
@@ -731,6 +733,7 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
            #!/bin/bash -x
+           echo "${project.version} - ${timestamp}"
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource seedC --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedC --region ${AWS::Region}
@@ -932,6 +935,7 @@ Resources:
       UserData:
         Fn::Base64: !Sub |
            #!/bin/bash -x
+           echo "${project.version} - ${timestamp}"
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource launchConfiguration --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource autoScalingGroup --region ${AWS::Region}
