@@ -2,8 +2,8 @@ AWSTemplateFormatVersion: 2010-09-09
 Description: This template deploys an ElastiCache managed Redis.
 
 Parameters:
-  vpcStackName:
-    Description: The name of an existing VPC stack in which Redis will be deployed.
+  networkStackName:
+    Description: The name of an existing network stack in which a Cassandra cluster will be created.
     Type: String
     MinLength: 1
 
@@ -21,7 +21,7 @@ Resources:
       GroupDescription: !Sub ${AWS::StackName} Security Group
       VpcId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-vpc"
+          !Sub "${networkStackName}-vpc"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Security Group
@@ -36,19 +36,19 @@ Resources:
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
         - !Select
           - 1
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
         - !Select
           - 2
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
 
   cacheCluster:
     Type: AWS::ElastiCache::CacheCluster

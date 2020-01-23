@@ -2,8 +2,8 @@ AWSTemplateFormatVersion: 2010-09-09
 Description: This template deploys an application load balancer that is reachable from the internet.
 
 Parameters:
-  vpcStackName:
-    Description: The name of an existing VPC stack in which the load balancer will be deployed.
+  networkStackName:
+    Description: The name of an existing network stack in which a Cassandra cluster will be created.
     Type: String
     MinLength: 1
 
@@ -15,7 +15,7 @@ Resources:
       GroupDescription: !Sub ${AWS::StackName} Security Group
       VpcId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-vpc"
+          !Sub "${networkStackName}-vpc"
       SecurityGroupIngress:
         - IpProtocol: tcp
           FromPort: 80
@@ -39,19 +39,19 @@ Resources:
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-public-subnets"
+                !Sub "${networkStackName}-public-subnets"
         - !Select
           - 1
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-public-subnets"
+                !Sub "${networkStackName}-public-subnets"
         - !Select
           - 2
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-public-subnets"
+                !Sub "${networkStackName}-public-subnets"
 
   listener:
     Type: AWS::ElasticLoadBalancingV2::Listener
