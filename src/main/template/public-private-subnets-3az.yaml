@@ -13,7 +13,7 @@ Parameters:
   vpcId:
     Description: If the VPC in which the CIDR range will be created is not CloudFormation managed, enter its id here.
       Otherwise, leave it blank.
-    Type: String
+    Type: AWS::EC2::VPC::Id
 
   internetGatewayId:
     Description: If the VPC in which the CIDR range will be created is not CloudFormation managed, enter its internet
