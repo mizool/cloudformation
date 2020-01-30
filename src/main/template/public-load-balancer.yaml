@@ -7,6 +7,11 @@ Parameters:
     Type: String
     MinLength: 1
 
+  sslCertificateArn:
+    Description: The ARN of the SSL certificate to be used by the load balancer.
+    Type: String
+    MinLength: 1
+
 Resources:
   securityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -16,14 +21,27 @@ Resources:
       VpcId:
         Fn::ImportValue:
           !Sub "${networkStackName}-vpc"
-      SecurityGroupIngress:
-        - IpProtocol: tcp
-          FromPort: 80
-          ToPort: 80
-          CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Security Group
+
+  loadBalancer80Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 80
+      ToPort: 80
+      CidrIp: 0.0.0.0/0
+
+  loadBalancer443Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 443
+      ToPort: 443
+      CidrIp: 0.0.0.0/0
 
   loadBalancer:
     Type: AWS::ElasticLoadBalancingV2::LoadBalancer
@@ -53,7 +71,23 @@ Resources:
             - Fn::ImportValue:
                 !Sub "${networkStackName}-public-subnets"
 
-  listener:
+  httpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: redirect
+          RedirectConfig:
+            Host: "#{host}"
+            Path: "/#{path}"
+            Port: 443
+            Protocol: HTTPS
+            Query: "#{query}"
+            StatusCode: HTTP_301
+      LoadBalancerArn: !Ref loadBalancer
+      Port: 80
+      Protocol: HTTP
+
+  httpsListener:
     Type: AWS::ElasticLoadBalancingV2::Listener
     Properties:
       DefaultActions:
@@ -63,8 +97,11 @@ Resources:
             StatusCode: 404
             MessageBody: "{\"errors\":{\"GLOBAL\":[{\"errorId\":\"com.github.mizool.core.exception.ObjectNotFoundException\",\"parameters\":{\"source\":\"LoadBalancer\"}}]}}"
       LoadBalancerArn: !Ref loadBalancer
-      Port: 80
-      Protocol: HTTP
+      SslPolicy: ELBSecurityPolicy-2016-08
+      Certificates:
+        - CertificateArn: !Ref sslCertificateArn
+      Port: 443
+      Protocol: HTTPS
 
 Outputs:
   SecurityGroup:
@@ -83,6 +120,6 @@ Outputs:
 
   Listener:
     Description: The public load balancer listener, so that listener rules can be registered to it.
-    Value: !Ref listener
+    Value: !Ref httpsListener
     Export:
       Name: !Sub ${AWS::StackName}-public-lb-listener
