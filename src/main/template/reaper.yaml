@@ -2,8 +2,8 @@ AWSTemplateFormatVersion: 2010-09-09
 Description: This template deploys a Cassandra Reaper stack into an existing VPC.
 
 Parameters:
-  vpcStackName:
-    Description: The name of an existing VPC stack in which a Cassandra cluster will be created.
+  networkStackName:
+    Description: The name of an existing network stack in which Cassandra Reaper will be created.
     Type: String
     MinLength: 1
 
@@ -12,7 +12,7 @@ Parameters:
     Type: AWS::EC2::KeyPair::KeyName
 
   instanceType:
-    Description: The instance type used for the cassandra nodes.
+    Description: The instance type used for the Cassandra Reaper node.
     Type: String
     MinLength: 1
     Default: t2.small
@@ -37,7 +37,7 @@ Resources:
       GroupDescription: !Sub ${AWS::StackName} Reaper Security Group
       VpcId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-vpc"
+          !Sub "${networkStackName}-vpc"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Reaper Security Group
@@ -51,7 +51,7 @@ Resources:
       ToPort: 22
       SourceSecurityGroupId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-bastion-security-group"
+          !Sub "${networkStackName}-bastion-security-group"
 
   bastion8080Ingress:
     Type: AWS::EC2::SecurityGroupIngress
@@ -62,7 +62,7 @@ Resources:
       ToPort: 8080
       SourceSecurityGroupId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-bastion-security-group"
+          !Sub "${networkStackName}-bastion-security-group"
 
   instance:
     Type: "AWS::EC2::Instance"
@@ -80,7 +80,7 @@ Resources:
         - Fn::Split:
           - ","
           - Fn::ImportValue:
-              !Sub "${vpcStackName}-private-subnets"
+              !Sub "${networkStackName}-private-subnets"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Reaper
