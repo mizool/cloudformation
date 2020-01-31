@@ -3,7 +3,7 @@ Description: This template deploys an ElastiCache managed Redis.
 
 Parameters:
   networkStackName:
-    Description: The name of an existing network stack in which a Cassandra cluster will be created.
+    Description: The name of an existing network stack in which Redis will be created.
     Type: String
     MinLength: 1
 

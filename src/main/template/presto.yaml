@@ -3,7 +3,7 @@ Description: This template deploys a Presto cluster connected to a cassandra dat
 
 Parameters:
   networkStackName:
-    Description: The name of an existing network stack in which a Cassandra cluster will be created.
+    Description: The name of an existing network stack in which Presto will be created.
     Type: String
     MinLength: 1
 
