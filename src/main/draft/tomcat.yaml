@@ -239,6 +239,19 @@ Resources:
         Fn::Base64: !Sub |
            #!/bin/bash -x
            yum update -y
+           echo "${project.version} - ${timestamp}"
+           echo "networkStackName: ${networkStackName}"
+           echo "cassandraStackName: ${cassandraStackName}"
+           echo "publicLoadBalancerStackName: ${publicLoadBalancerStackName}"
+           echo "redisStackName: ${redisStackName}"
+           echo "deployableBucketName: ${deployableBucketName}"
+           echo "deployableFileKey: ${deployableFileKey}"
+           echo "applicationContextPath: ${applicationContextPath}"
+           echo "papertrailHost: ${papertrailHost}"
+           echo "papertrailPort: ${papertrailPort}"
+           echo "instanceType: ${instanceType}"
+           echo "keyName: ${keyName}"
+           echo "authorizedKeys: ${authorizedKeys}"
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource launchConfiguration --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource autoScalingGroup --region ${AWS::Region}
     Metadata:
