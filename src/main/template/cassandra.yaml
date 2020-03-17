@@ -177,6 +177,17 @@ Resources:
         Fn::ImportValue:
           !Sub "${networkStackName}-bastion-security-group"
 
+  bastion9042Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 9042
+      ToPort: 9042
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${networkStackName}-bastion-security-group"
+
   port7000securityGroupIngress:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
