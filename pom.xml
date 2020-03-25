@@ -5,7 +5,7 @@
 
     <groupId>com.github.mizool.cloudformation</groupId>
     <artifactId>cloudformation</artifactId>
-    <version>0.5-SNAPSHOT</version>
+    <version>0.4</version>
     <name>${project.groupId}:${project.artifactId}</name>
     <description>Cloudformation templates and scripts.</description>
     <url>https://github.com/mizool/cloudformation</url>
