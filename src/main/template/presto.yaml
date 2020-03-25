@@ -2,8 +2,8 @@ AWSTemplateFormatVersion: 2010-09-09
 Description: This template deploys a Presto cluster connected to a cassandra database.
 
 Parameters:
-  vpcStackName:
-    Description: The name of an existing VPC stack in which Presto will be deployed.
+  networkStackName:
+    Description: The name of an existing network stack in which Presto will be created.
     Type: String
     MinLength: 1
 
@@ -79,7 +79,7 @@ Resources:
       GroupDescription: !Sub ${AWS::StackName} Coordinator Security Group
       VpcId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-vpc"
+          !Sub "${networkStackName}-vpc"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Coordinator Security Group
@@ -91,7 +91,7 @@ Resources:
       GroupDescription: !Sub ${AWS::StackName} Worker Security Group
       VpcId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-vpc"
+          !Sub "${networkStackName}-vpc"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Worker Security Group
@@ -105,7 +105,7 @@ Resources:
       ToPort: 22
       SourceSecurityGroupId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-bastion-security-group"
+          !Sub "${networkStackName}-bastion-security-group"
 
   bastionWorker22Ingress:
     Type: AWS::EC2::SecurityGroupIngress
@@ -116,7 +116,7 @@ Resources:
       ToPort: 22
       SourceSecurityGroupId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-bastion-security-group"
+          !Sub "${networkStackName}-bastion-security-group"
 
   bastionCoordinator8080Ingress:
     Type: AWS::EC2::SecurityGroupIngress
@@ -127,7 +127,7 @@ Resources:
       ToPort: 8080
       SourceSecurityGroupId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-bastion-security-group"
+          !Sub "${networkStackName}-bastion-security-group"
 
   coordinatorWorker8080Ingress:
     Type: AWS::EC2::SecurityGroupIngress
@@ -207,7 +207,7 @@ Resources:
       VPCs:
         - VPCId:
             Fn::ImportValue:
-              !Sub "${vpcStackName}-vpc"
+              !Sub "${networkStackName}-vpc"
           VPCRegion: !Ref "AWS::Region"
 
   allowRoute53RecordSetManagementRole:
@@ -259,6 +259,16 @@ Resources:
         Fn::Base64: !Sub |
            #!/bin/bash -x
            echo "${project.version} - ${timestamp}"
+           echo "networkStackName: ${networkStackName}"
+           echo "coordinatorInstanceType: ${coordinatorInstanceType}"
+           echo "cassandraStackName: ${cassandraStackName}"
+           echo "environmentName: ${environmentName}"
+           echo "papertrailHost: ${papertrailHost}"
+           echo "papertrailPort: ${papertrailPort}"
+           echo "numberOfWorkers: ${numberOfWorkers}"
+           echo "keyName: ${keyName}"
+           echo "authorizedKeys: ${authorizedKeys}"
+           echo "internalDomain: ${internalDomain}"
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource coordinatorLaunchConfiguration --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource coordinatorAutoScalingGroup --region ${AWS::Region}
@@ -497,6 +507,16 @@ Resources:
         Fn::Base64: !Sub |
            #!/bin/bash -x
            echo "${project.version} - ${timestamp}"
+           echo "networkStackName: ${networkStackName}"
+           echo "workerInstanceType: ${workerInstanceType}"
+           echo "cassandraStackName: ${cassandraStackName}"
+           echo "environmentName: ${environmentName}"
+           echo "papertrailHost: ${papertrailHost}"
+           echo "papertrailPort: ${papertrailPort}"
+           echo "numberOfWorkers: ${numberOfWorkers}"
+           echo "keyName: ${keyName}"
+           echo "authorizedKeys: ${authorizedKeys}"
+           echo "internalDomain: ${internalDomain}"
            yum update -y
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource workerLaunchConfiguration --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource workerAutoScalingGroup --region ${AWS::Region}
@@ -687,19 +707,19 @@ Resources:
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
           - 1
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
           - 2
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Coordinator
@@ -725,19 +745,19 @@ Resources:
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
           - 1
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
           - 2
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Worker

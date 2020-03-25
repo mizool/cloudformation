@@ -1,8 +1,9 @@
 == Cloudformation
 Cloudformation templates and scripts.
 
-== VPC architecture ==
-image::images/vpc.jpg[VPC architecture]
+== Network architecture ==
+The network template assumes a region with three availability zones. It will deploy itself into any VPC. The following visualization assumes, that this network is the only structure inside the VPC.
+image::images/public-private-subnets-3az.jpg[VPC architecture]
 
 == Continuous integration and deployment on Maven Central
 This project is built continuously by https://travis-ci.org/[Travis CI] using the scripts provided by https://github.com/mizool/travis-ci-maven-gitflow[Mizool's Travis CI Maven gitflow script repository].

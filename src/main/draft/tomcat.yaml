@@ -3,8 +3,8 @@ Description: Draft template for a Java Web Application running in an autoscaling
   adapt configuration as needed.
 
 Parameters:
-  vpcStackName:
-    Description: The name of an existing VPC stack in which the application will be deployed.
+  networkStackName:
+    Description: The name of an existing network stack in which a Cassandra cluster will be created.
     Type: String
     MinLength: 1
 
@@ -102,7 +102,7 @@ Resources:
       GroupDescription: !Sub ${AWS::StackName} Security Group
       VpcId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-vpc"
+          !Sub "${networkStackName}-vpc"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Security Group
@@ -116,7 +116,7 @@ Resources:
       ToPort: 22
       SourceSecurityGroupId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-bastion-security-group"
+          !Sub "${networkStackName}-bastion-security-group"
 
   cassandra9042Ingress:
     Type: AWS::EC2::SecurityGroupIngress
@@ -205,7 +205,7 @@ Resources:
       UnhealthyThresholdCount: 2
       VpcId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-vpc"
+          !Sub "${networkStackName}-vpc"
 
   listenerRule:
     Type: AWS::ElasticLoadBalancingV2::ListenerRule
@@ -239,6 +239,19 @@ Resources:
         Fn::Base64: !Sub |
            #!/bin/bash -x
            yum update -y
+           echo "${project.version} - ${timestamp}"
+           echo "networkStackName: ${networkStackName}"
+           echo "cassandraStackName: ${cassandraStackName}"
+           echo "publicLoadBalancerStackName: ${publicLoadBalancerStackName}"
+           echo "redisStackName: ${redisStackName}"
+           echo "deployableBucketName: ${deployableBucketName}"
+           echo "deployableFileKey: ${deployableFileKey}"
+           echo "applicationContextPath: ${applicationContextPath}"
+           echo "papertrailHost: ${papertrailHost}"
+           echo "papertrailPort: ${papertrailPort}"
+           echo "instanceType: ${instanceType}"
+           echo "keyName: ${keyName}"
+           echo "authorizedKeys: ${authorizedKeys}"
            /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource launchConfiguration --region ${AWS::Region}
            /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource autoScalingGroup --region ${AWS::Region}
     Metadata:
@@ -432,19 +445,19 @@ Resources:
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
           - 1
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
           - 2
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} AS

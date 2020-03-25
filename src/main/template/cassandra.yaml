@@ -1,11 +1,11 @@
 AWSTemplateFormatVersion: 2010-09-09
-Description: This template deploys a Cassandra stack into an existing VPC. The Cassandra stack consists of three seed
-  node instances, and an autoscaling group for additional instances. Note that scaling down is harder than scaling up.
-  There is no automatism that decommissions on termination, so this needs to be done manually.
+Description: This template deploys a Cassandra stack into an existing network stack. The Cassandra stack consists of
+  three seed node instances, and an autoscaling group for additional instances. Note that scaling down is harder than
+  scaling up. There is no automatism that decommissions on termination, so this needs to be done manually.
 
 Parameters:
-  vpcStackName:
-    Description: The name of an existing VPC stack in which a Cassandra cluster will be created.
+  networkStackName:
+    Description: The name of an existing network stack in which a Cassandra cluster will be created.
     Type: String
     MinLength: 1
 
@@ -161,7 +161,7 @@ Resources:
       GroupDescription: !Sub ${AWS::StackName} Cassandra Security Group
       VpcId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-vpc"
+          !Sub "${networkStackName}-vpc"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Cassandra Security Group
@@ -175,7 +175,18 @@ Resources:
       ToPort: 22
       SourceSecurityGroupId:
         Fn::ImportValue:
-          !Sub "${vpcStackName}-bastion-security-group"
+          !Sub "${networkStackName}-bastion-security-group"
+
+  bastion9042Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 9042
+      ToPort: 9042
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${networkStackName}-bastion-security-group"
 
   port7000securityGroupIngress:
     Type: AWS::EC2::SecurityGroupIngress
@@ -240,7 +251,7 @@ Resources:
       VPCs:
         - VPCId:
             Fn::ImportValue:
-              !Sub "${vpcStackName}-vpc"
+              !Sub "${networkStackName}-vpc"
           VPCRegion: !Ref "AWS::Region"
 
   allowRoute53RecordSetManagementRole:
@@ -293,7 +304,7 @@ Resources:
         - Fn::Split:
           - ","
           - Fn::ImportValue:
-              !Sub "${vpcStackName}-private-subnets"
+              !Sub "${networkStackName}-private-subnets"
       BlockDeviceMappings:
         - DeviceName: "/dev/sdf"
           Ebs:
@@ -504,7 +515,7 @@ Resources:
         - Fn::Split:
           - ","
           - Fn::ImportValue:
-              !Sub "${vpcStackName}-private-subnets"
+              !Sub "${networkStackName}-private-subnets"
       BlockDeviceMappings:
         - DeviceName: "/dev/sdf"
           Ebs:
@@ -715,7 +726,7 @@ Resources:
         - Fn::Split:
           - ","
           - Fn::ImportValue:
-              !Sub "${vpcStackName}-private-subnets"
+              !Sub "${networkStackName}-private-subnets"
       BlockDeviceMappings:
         - DeviceName: "/dev/sdf"
           Ebs:
@@ -1059,19 +1070,19 @@ Resources:
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
           - 1
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
           - 2
           - Fn::Split:
             - ","
             - Fn::ImportValue:
-                !Sub "${vpcStackName}-private-subnets"
+                !Sub "${networkStackName}-private-subnets"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} AS
