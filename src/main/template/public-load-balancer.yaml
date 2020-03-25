@@ -12,6 +12,11 @@ Parameters:
     Type: String
     MinLength: 1
 
+  publicDomain:
+    Description: The domain name to export instead of the internal DNS.
+    Type: String
+    MinLength: 1
+
 Resources:
   securityGroup:
     Type: AWS::EC2::SecurityGroup
@@ -111,10 +116,8 @@ Outputs:
       Name: !Sub ${AWS::StackName}-security-group
 
   DNSName:
-    Description: The load balancer DNS name.
-    Value: !GetAtt
-      - loadBalancer
-      - DNSName
+    Description: The DNS name to use when talking to the load balancer.
+    Value: !Ref publicDomain
     Export:
       Name: !Sub ${AWS::StackName}-public-lb-dns-name
 
