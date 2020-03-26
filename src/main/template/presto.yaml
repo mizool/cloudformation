@@ -64,12 +64,85 @@ Parameters:
     MinLength: 1
     Default: presto
 
+  influxHost:
+    Type: String
+    MinLength: 1
+
+  influxPort:
+    Type: Number
+    Default: 8086
+
+  influxDatabase:
+    Type: String
+    MinLength: 1
+
+  influxTagStage:
+    Type: String
+    MinLength: 1
+
+  influxTagProduct:
+    Type: String
+    MinLength: 1
+
+  influxTagTeam:
+    Type: String
+    MinLength: 1
+
 Mappings:
   Regions:
     eu-central-1:
       AmazonLinux2Ami: ami-0f3a43fbf2d3899f7
     eu-west-1:
       AmazonLinux2Ami: ami-01f14919ba412de34
+
+  Scripts:
+    Telegraf:
+      AddInstanceIdToTelegrafConf: |
+        #!/bin/bash -xe
+        export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+        sed -i "/  instance =/c\  instance = \"${INSTANCE_ID}\"" /etc/telegraf/telegraf.conf
+
+  Files:
+    Telegraf:
+      InfluxDbRepo: |
+        [influxdb]
+        name = InfluxDB Repository - RHEL
+        baseurl = https://repos.influxdata.com/rhel/7/x86_64/stable/
+        enabled = 1
+        gpgcheck = 1
+        gpgkey = https://repos.influxdata.com/influxdb.key
+
+      TelegrafConf: |
+        [global_tags]
+          stage = "{{influxTagStage}}"
+          product = "{{influxTagProduct}}"
+          region = "${AWS::Region}"
+          team = "{{influxTagTeam}}"
+          instance =
+        [agent]
+          interval = "10s"
+          round_interval = true
+          metric_batch_size = 1000
+          metric_buffer_limit = 10000
+          collection_jitter = "0s"
+          flush_interval = "10s"
+          flush_jitter = "0s"
+          precision = ""
+          debug = false
+          quiet = false
+          logfile = ""
+          hostname = ""
+          omit_hostname = false
+        [[outputs.influxdb]]
+          urls = ["http://{{influxHost}}:{{influxPort}}"]
+          database = "{{influxDatabase}}"
+        [[inputs.cpu]]
+          percpu = true
+          totalcpu = true
+          collect_cpu_time = false
+          report_active = false
+        [[inputs.disk]]
+          ignore_fs = ["tmpfs", "devtmpfs", "devfs", "overlay", "aufs", "squashfs"]
 
 Resources:
   coordinatorSecurityGroup:
@@ -241,7 +314,7 @@ Resources:
     Properties:
       Path: "/"
       Roles:
-       - !Ref allowRoute53RecordSetManagementRole
+        - !Ref allowRoute53RecordSetManagementRole
 
   coordinatorLaunchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
@@ -257,21 +330,27 @@ Resources:
         - !Ref coordinatorSecurityGroup
       UserData:
         Fn::Base64: !Sub |
-           #!/bin/bash -x
-           echo "${project.version} - ${timestamp}"
-           echo "networkStackName: ${networkStackName}"
-           echo "coordinatorInstanceType: ${coordinatorInstanceType}"
-           echo "cassandraStackName: ${cassandraStackName}"
-           echo "environmentName: ${environmentName}"
-           echo "papertrailHost: ${papertrailHost}"
-           echo "papertrailPort: ${papertrailPort}"
-           echo "numberOfWorkers: ${numberOfWorkers}"
-           echo "keyName: ${keyName}"
-           echo "authorizedKeys: ${authorizedKeys}"
-           echo "internalDomain: ${internalDomain}"
-           yum update -y
-           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource coordinatorLaunchConfiguration --region ${AWS::Region}
-           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource coordinatorAutoScalingGroup --region ${AWS::Region}
+          #!/bin/bash -x
+          echo "${project.version} - ${timestamp}"
+          echo "networkStackName: ${networkStackName}"
+          echo "coordinatorInstanceType: ${coordinatorInstanceType}"
+          echo "cassandraStackName: ${cassandraStackName}"
+          echo "environmentName: ${environmentName}"
+          echo "papertrailHost: ${papertrailHost}"
+          echo "papertrailPort: ${papertrailPort}"
+          echo "numberOfWorkers: ${numberOfWorkers}"
+          echo "keyName: ${keyName}"
+          echo "authorizedKeys: ${authorizedKeys}"
+          echo "internalDomain: ${internalDomain}"
+          echo "influxHost: ${influxHost}"
+          echo "influxPort: ${influxPort}"
+          echo "influxDatabase: ${influxDatabase}"
+          echo "influxTagStage: ${influxTagStage}"
+          echo "influxTagProduct: ${influxTagProduct}"
+          echo "influxTagTeam: ${influxTagTeam}"
+          yum update -y
+          /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource coordinatorLaunchConfiguration --region ${AWS::Region}
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource coordinatorAutoScalingGroup --region ${AWS::Region}
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
@@ -282,6 +361,10 @@ Resources:
             - "openjdk8"
             - "aws_cli"
             - "register_dns"
+            - "add_influxdb_repo"
+            - "install_telegraf"
+            - "configure_telegraf"
+            - "start_telegraf"
             - "download_presto"
             - "configure_presto"
             - "setup_remote_syslog"
@@ -355,6 +438,40 @@ Resources:
                 - - "echo \"$(hostname -I) coordinator."
                   - !Ref internalDomain
                   - "\" >> /etc/hosts"
+        add_influxdb_repo:
+          files:
+            /etc/yum.repos.d/influxdb.repo:
+              content: !FindInMap ["Files", "Telegraf", "InfluxDbRepo"]
+              owner: root
+              group: root
+              mode: "000644"
+        install_telegraf:
+          packages:
+            yum:
+              telegraf: []
+        configure_telegraf:
+          files:
+            /etc/telegraf/telegraf.conf:
+              content: !FindInMap ["Files", "Telegraf", "TelegrafConf"]
+              context:
+                influxHost: !Ref influxHost
+                influxPort: !Ref influxPort
+                influxDatabase: !Ref influxDatabase
+                influxTagStage: !Ref influxTagStage
+                influxTagProduct: !Ref influxTagProduct
+                influxTagTeam: !Ref influxTagTeam
+              owner: ec2-user
+              group: ec2-user
+              mode: "000644"
+          commands:
+            add_instance_id_to_telegraf_conf:
+              command: !FindInMap ["Scripts", "Telegraf", "AddInstanceIdToTelegrafConf"]
+        start_telegraf:
+          services:
+            sysvinit:
+              telegraf:
+                enabled: true
+                ensureRunning: true
         download_presto:
           commands:
             download_presto:
@@ -505,21 +622,27 @@ Resources:
         - !Ref workerSecurityGroup
       UserData:
         Fn::Base64: !Sub |
-           #!/bin/bash -x
-           echo "${project.version} - ${timestamp}"
-           echo "networkStackName: ${networkStackName}"
-           echo "workerInstanceType: ${workerInstanceType}"
-           echo "cassandraStackName: ${cassandraStackName}"
-           echo "environmentName: ${environmentName}"
-           echo "papertrailHost: ${papertrailHost}"
-           echo "papertrailPort: ${papertrailPort}"
-           echo "numberOfWorkers: ${numberOfWorkers}"
-           echo "keyName: ${keyName}"
-           echo "authorizedKeys: ${authorizedKeys}"
-           echo "internalDomain: ${internalDomain}"
-           yum update -y
-           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource workerLaunchConfiguration --region ${AWS::Region}
-           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource workerAutoScalingGroup --region ${AWS::Region}
+          #!/bin/bash -x
+          echo "${project.version} - ${timestamp}"
+          echo "networkStackName: ${networkStackName}"
+          echo "workerInstanceType: ${workerInstanceType}"
+          echo "cassandraStackName: ${cassandraStackName}"
+          echo "environmentName: ${environmentName}"
+          echo "papertrailHost: ${papertrailHost}"
+          echo "papertrailPort: ${papertrailPort}"
+          echo "numberOfWorkers: ${numberOfWorkers}"
+          echo "keyName: ${keyName}"
+          echo "authorizedKeys: ${authorizedKeys}"
+          echo "internalDomain: ${internalDomain}"
+          echo "influxHost: ${influxHost}"
+          echo "influxPort: ${influxPort}"
+          echo "influxDatabase: ${influxDatabase}"
+          echo "influxTagStage: ${influxTagStage}"
+          echo "influxTagProduct: ${influxTagProduct}"
+          echo "influxTagTeam: ${influxTagTeam}"
+          yum update -y
+          /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource workerLaunchConfiguration --region ${AWS::Region}
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource workerAutoScalingGroup --region ${AWS::Region}
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
@@ -528,6 +651,10 @@ Resources:
             - "ntp"
             - "haveged"
             - "openjdk8"
+            - "add_influxdb_repo"
+            - "install_telegraf"
+            - "configure_telegraf"
+            - "start_telegraf"
             - "download_presto"
             - "configure_presto"
             - "setup_remote_syslog"
@@ -568,6 +695,40 @@ Resources:
             yum:
               java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
               java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
+        add_influxdb_repo:
+          files:
+            /etc/yum.repos.d/influxdb.repo:
+              content: !FindInMap ["Files", "Telegraf", "InfluxDbRepo"]
+              owner: root
+              group: root
+              mode: "000644"
+        install_telegraf:
+          packages:
+            yum:
+              telegraf: []
+        configure_telegraf:
+          files:
+            /etc/telegraf/telegraf.conf:
+              content: !FindInMap ["Files", "Telegraf", "TelegrafConf"]
+              context:
+                influxHost: !Ref influxHost
+                influxPort: !Ref influxPort
+                influxDatabase: !Ref influxDatabase
+                influxTagStage: !Ref influxTagStage
+                influxTagProduct: !Ref influxTagProduct
+                influxTagTeam: !Ref influxTagTeam
+              owner: ec2-user
+              group: ec2-user
+              mode: "000644"
+          commands:
+            add_instance_id_to_telegraf_conf:
+              command: !FindInMap ["Scripts", "Telegraf", "AddInstanceIdToTelegrafConf"]
+        start_telegraf:
+          services:
+            sysvinit:
+              telegraf:
+                enabled: true
+                ensureRunning: true
         download_presto:
           commands:
             download_presto:
@@ -703,23 +864,23 @@ Resources:
       DesiredCapacity: 1
       VPCZoneIdentifier:
         - Fn::Select:
-          - 0
-          - Fn::Split:
-            - ","
-            - Fn::ImportValue:
-                !Sub "${networkStackName}-private-subnets"
+            - 0
+            - Fn::Split:
+                - ","
+                - Fn::ImportValue:
+                    !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
-          - 1
-          - Fn::Split:
-            - ","
-            - Fn::ImportValue:
-                !Sub "${networkStackName}-private-subnets"
+            - 1
+            - Fn::Split:
+                - ","
+                - Fn::ImportValue:
+                    !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
-          - 2
-          - Fn::Split:
-            - ","
-            - Fn::ImportValue:
-                !Sub "${networkStackName}-private-subnets"
+            - 2
+            - Fn::Split:
+                - ","
+                - Fn::ImportValue:
+                    !Sub "${networkStackName}-private-subnets"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Coordinator
@@ -741,23 +902,23 @@ Resources:
       DesiredCapacity: !Ref numberOfWorkers
       VPCZoneIdentifier:
         - Fn::Select:
-          - 0
-          - Fn::Split:
-            - ","
-            - Fn::ImportValue:
-                !Sub "${networkStackName}-private-subnets"
+            - 0
+            - Fn::Split:
+                - ","
+                - Fn::ImportValue:
+                    !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
-          - 1
-          - Fn::Split:
-            - ","
-            - Fn::ImportValue:
-                !Sub "${networkStackName}-private-subnets"
+            - 1
+            - Fn::Split:
+                - ","
+                - Fn::ImportValue:
+                    !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
-          - 2
-          - Fn::Split:
-            - ","
-            - Fn::ImportValue:
-                !Sub "${networkStackName}-private-subnets"
+            - 2
+            - Fn::Split:
+                - ","
+                - Fn::ImportValue:
+                    !Sub "${networkStackName}-private-subnets"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Worker
