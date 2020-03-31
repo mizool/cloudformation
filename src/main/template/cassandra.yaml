@@ -62,7 +62,7 @@ Parameters:
 
   influxHost:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxPort:
     Type: Number
@@ -70,19 +70,19 @@ Parameters:
 
   influxDatabase:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxTagStage:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxTagProduct:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxTagTeam:
     Type: String
-    MinLength: 1
+    Default: ""
 
 Mappings:
   Regions:
@@ -396,7 +396,13 @@ Resources:
           #!/bin/bash -x
           echo "${project.version} - ${timestamp}"
           yum update -y
-          /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource seedA --region ${AWS::Region}
+          if [ -n "${influxHost}" ]
+          then
+              CONFIG_SET=setup_with_telegraf
+          else
+              CONFIG_SET=setup_without_telegraf
+          fi
+          /opt/aws/bin/cfn-init -v --configsets $CONFIG_SET --stack ${AWS::StackName} --resource seedA --region ${AWS::Region}
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedA --region ${AWS::Region}
     CreationPolicy:
       ResourceSignal:
@@ -404,7 +410,7 @@ Resources:
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
-          setup:
+          setup_with_telegraf:
             - "ssh_keys"
             - "ntp"
             - "haveged"
@@ -415,6 +421,20 @@ Resources:
             - "install_telegraf"
             - "configure_telegraf"
             - "start_telegraf"
+            - "add_cassandra_repo"
+            - "install_cassandra"
+            - "configure_cassandra"
+            - "disable_bootstrapping"
+            - "start_cassandra"
+            - "ensure_cassandra_is_running"
+            - "unregister_dns"
+          setup_without_telegraf:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
+            - "aws_cli"
+            - "register_dns"
             - "add_cassandra_repo"
             - "install_cassandra"
             - "configure_cassandra"
@@ -645,7 +665,13 @@ Resources:
           #!/bin/bash -x
           echo "${project.version} - ${timestamp}"
           yum update -y
-          /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource seedB --region ${AWS::Region}
+          if [ -n "${influxHost}" ]
+          then
+              CONFIG_SET=setup_with_telegraf
+          else
+              CONFIG_SET=setup_without_telegraf
+          fi
+          /opt/aws/bin/cfn-init -v --configsets $CONFIG_SET --stack ${AWS::StackName} --resource seedB --region ${AWS::Region}
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedB --region ${AWS::Region}
     CreationPolicy:
       ResourceSignal:
@@ -653,7 +679,7 @@ Resources:
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
-          setup:
+          setup_with_telegraf:
             - "ssh_keys"
             - "ntp"
             - "haveged"
@@ -664,6 +690,20 @@ Resources:
             - "install_telegraf"
             - "configure_telegraf"
             - "start_telegraf"
+            - "add_cassandra_repo"
+            - "install_cassandra"
+            - "configure_cassandra"
+            - "disable_bootstrapping"
+            - "start_cassandra"
+            - "ensure_cassandra_is_running"
+            - "unregister_dns"
+          setup_without_telegraf:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
+            - "aws_cli"
+            - "register_dns"
             - "add_cassandra_repo"
             - "install_cassandra"
             - "configure_cassandra"
@@ -894,7 +934,13 @@ Resources:
           #!/bin/bash -x
           echo "${project.version} - ${timestamp}"
           yum update -y
-          /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource seedC --region ${AWS::Region}
+          if [ -n "${influxHost}" ]
+          then
+              CONFIG_SET=setup_with_telegraf
+          else
+              CONFIG_SET=setup_without_telegraf
+          fi
+          /opt/aws/bin/cfn-init -v --configsets $CONFIG_SET --stack ${AWS::StackName} --resource seedC --region ${AWS::Region}
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedC --region ${AWS::Region}
     CreationPolicy:
       ResourceSignal:
@@ -902,7 +948,7 @@ Resources:
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
-          setup:
+          setup_with_telegraf:
             - "ssh_keys"
             - "ntp"
             - "haveged"
@@ -913,6 +959,20 @@ Resources:
             - "install_telegraf"
             - "configure_telegraf"
             - "start_telegraf"
+            - "add_cassandra_repo"
+            - "install_cassandra"
+            - "configure_cassandra"
+            - "disable_bootstrapping"
+            - "start_cassandra"
+            - "ensure_cassandra_is_running"
+            - "unregister_dns"
+          setup_without_telegraf:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
+            - "aws_cli"
+            - "register_dns"
             - "add_cassandra_repo"
             - "install_cassandra"
             - "configure_cassandra"
@@ -1134,12 +1194,18 @@ Resources:
           #!/bin/bash -x
           echo "${project.version} - ${timestamp}"
           yum update -y
-          /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource launchConfiguration --region ${AWS::Region}
+          if [ -n "${influxHost}" ]
+          then
+              CONFIG_SET=setup_with_telegraf
+          else
+              CONFIG_SET=setup_without_telegraf
+          fi
+          /opt/aws/bin/cfn-init -v --configsets $CONFIG_SET --stack ${AWS::StackName} --resource launchConfiguration --region ${AWS::Region}
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource autoScalingGroup --region ${AWS::Region}
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
-          setup:
+          setup_with_telegraf:
             - "ssh_keys"
             - "ntp"
             - "haveged"
@@ -1148,6 +1214,16 @@ Resources:
             - "install_telegraf"
             - "configure_telegraf"
             - "start_telegraf"
+            - "add_cassandra_repo"
+            - "install_cassandra"
+            - "configure_cassandra"
+            - "start_cassandra"
+            - "ensure_cassandra_is_running"
+          setup_without_telegraf:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
             - "add_cassandra_repo"
             - "install_cassandra"
             - "configure_cassandra"

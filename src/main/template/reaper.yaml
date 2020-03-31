@@ -24,7 +24,7 @@ Parameters:
 
   influxHost:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxPort:
     Type: Number
@@ -32,19 +32,19 @@ Parameters:
 
   influxDatabase:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxTagStage:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxTagProduct:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxTagTeam:
     Type: String
-    MinLength: 1
+    Default: ""
 
 Mappings:
   Regions:
@@ -162,7 +162,13 @@ Resources:
           #!/bin/bash -x
           echo "${project.version} - ${timestamp}"
           yum update -y
-          /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource instance --region ${AWS::Region}
+          if [ -n "${influxHost}" ]
+          then
+              CONFIG_SET=setup_with_telegraf
+          else
+              CONFIG_SET=setup_without_telegraf
+          fi
+          /opt/aws/bin/cfn-init -v --configsets $CONFIG_SET --stack ${AWS::StackName} --resource instance --region ${AWS::Region}
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource instance --region ${AWS::Region}
     CreationPolicy:
       ResourceSignal:
@@ -170,7 +176,7 @@ Resources:
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
-          setup:
+          setup_with_telegraf:
             - "ssh_keys"
             - "ntp"
             - "haveged"
@@ -179,6 +185,15 @@ Resources:
             - "install_telegraf"
             - "configure_telegraf"
             - "start_telegraf"
+            - "add_reaper_repo"
+            - "install_reaper"
+            - "configure_reaper"
+            - "start_reaper"
+          setup_without_telegraf:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
             - "add_reaper_repo"
             - "install_reaper"
             - "configure_reaper"
