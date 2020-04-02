@@ -54,7 +54,7 @@ Parameters:
 
   influxHost:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxPort:
     Type: Number
@@ -62,19 +62,19 @@ Parameters:
 
   influxDatabase:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxTagStage:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxTagProduct:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxTagTeam:
     Type: String
-    MinLength: 1
+    Default: ""
 
 Mappings:
   Regions:
@@ -506,18 +506,27 @@ Resources:
           echo "influxTagProduct: ${influxTagProduct}"
           echo "influxTagTeam: ${influxTagTeam}"
           yum update -y
-          /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource bastionLaunchConfiguration --region ${AWS::Region}
+          if [ -n "${influxHost}" ]
+          then
+              CONFIG_SET=setup_with_telegraf
+          else
+              CONFIG_SET=setup_without_telegraf
+          fi
+          /opt/aws/bin/cfn-init -v --configsets $CONFIG_SET --stack ${AWS::StackName} --resource bastionLaunchConfiguration --region ${AWS::Region}
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource bastionAutoScalingGroup --region ${AWS::Region}
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
-          setup:
+          setup_with_telegraf:
             - "ssh_keys"
             - "ntp"
             - "add_influxdb_repo"
             - "install_telegraf"
             - "configure_telegraf"
             - "start_telegraf"
+          setup_without_telegraf:
+            - "ssh_keys"
+            - "ntp"
         ssh_keys:
           files:
             /home/ec2-user/.ssh/additional_keys:

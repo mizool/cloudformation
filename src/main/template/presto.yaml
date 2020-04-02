@@ -66,7 +66,7 @@ Parameters:
 
   influxHost:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxPort:
     Type: Number
@@ -74,19 +74,19 @@ Parameters:
 
   influxDatabase:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxTagStage:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxTagProduct:
     Type: String
-    MinLength: 1
+    Default: ""
 
   influxTagTeam:
     Type: String
-    MinLength: 1
+    Default: ""
 
 Mappings:
   Regions:
@@ -349,12 +349,18 @@ Resources:
           echo "influxTagProduct: ${influxTagProduct}"
           echo "influxTagTeam: ${influxTagTeam}"
           yum update -y
-          /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource coordinatorLaunchConfiguration --region ${AWS::Region}
+          if [ -n "${influxHost}" ]
+          then
+              CONFIG_SET=setup_with_telegraf
+          else
+              CONFIG_SET=setup_without_telegraf
+          fi
+          /opt/aws/bin/cfn-init -v --configsets $CONFIG_SET --stack ${AWS::StackName} --resource coordinatorLaunchConfiguration --region ${AWS::Region}
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource coordinatorAutoScalingGroup --region ${AWS::Region}
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
-          setup:
+          setup_with_telegraf:
             - "ssh_keys"
             - "ntp"
             - "haveged"
@@ -365,6 +371,18 @@ Resources:
             - "install_telegraf"
             - "configure_telegraf"
             - "start_telegraf"
+            - "download_presto"
+            - "configure_presto"
+            - "setup_remote_syslog"
+            - "start_presto"
+            - "setup_presto_cli"
+          setup_without_telegraf:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
+            - "aws_cli"
+            - "register_dns"
             - "download_presto"
             - "configure_presto"
             - "setup_remote_syslog"
@@ -641,12 +659,18 @@ Resources:
           echo "influxTagProduct: ${influxTagProduct}"
           echo "influxTagTeam: ${influxTagTeam}"
           yum update -y
-          /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource workerLaunchConfiguration --region ${AWS::Region}
+          if [ -n "${influxHost}" ]
+          then
+              CONFIG_SET=setup_with_telegraf
+          else
+              CONFIG_SET=setup_without_telegraf
+          fi
+          /opt/aws/bin/cfn-init -v --configsets $CONFIG_SET --stack ${AWS::StackName} --resource workerLaunchConfiguration --region ${AWS::Region}
           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource workerAutoScalingGroup --region ${AWS::Region}
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
-          setup:
+          setup_with_telegraf:
             - "ssh_keys"
             - "ntp"
             - "haveged"
@@ -655,6 +679,15 @@ Resources:
             - "install_telegraf"
             - "configure_telegraf"
             - "start_telegraf"
+            - "download_presto"
+            - "configure_presto"
+            - "setup_remote_syslog"
+            - "start_presto"
+          setup_without_telegraf:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
             - "download_presto"
             - "configure_presto"
             - "setup_remote_syslog"
