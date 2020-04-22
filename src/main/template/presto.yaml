@@ -523,6 +523,7 @@ Resources:
                 -XX:ReservedCodeCacheSize=512M
                 -Djdk.attach.allowAttachSelf=true
                 -Djdk.nio.maxCachedBufferSize=2000000
+                -Dcom.datastax.driver.NATIVE_TRANSPORT_MAX_FRAME_SIZE_IN_MB=1024
               owner: root
               group: root
               mode: "000644"
@@ -795,6 +796,7 @@ Resources:
                 -XX:ReservedCodeCacheSize=512M
                 -Djdk.attach.allowAttachSelf=true
                 -Djdk.nio.maxCachedBufferSize=2000000
+                -Dcom.datastax.driver.NATIVE_TRANSPORT_MAX_FRAME_SIZE_IN_MB=1024
               owner: root
               group: root
               mode: "000644"
