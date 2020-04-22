@@ -65,6 +65,30 @@ Parameters:
     Type: String
     MinLength: 1
 
+  influxHost:
+    Type: String
+    Default: ""
+
+  influxPort:
+    Type: Number
+    Default: 8086
+
+  influxDatabase:
+    Type: String
+    Default: ""
+
+  influxTagStage:
+    Type: String
+    Default: ""
+
+  influxTagProduct:
+    Type: String
+    Default: ""
+
+  influxTagTeam:
+    Type: String
+    Default: ""
+
 Mappings:
   Regions:
     eu-central-1:
@@ -93,6 +117,54 @@ Mappings:
         wget -O /opt/tomcat/lib/logback-classic-1.1.6.jar "https://repo1.maven.org/maven2/ch/qos/logback/logback-classic/1.1.6/logback-classic-1.1.6.jar"
         wget -O /opt/tomcat/lib/logback-syslog4j-1.0.0.jar "https://repo1.maven.org/maven2/com/papertrailapp/logback-syslog4j/1.0.0/logback-syslog4j-1.0.0.jar"
         wget -O /opt/tomcat/lib/syslog4j-0.9.46.jar "http://clojars.org/repo/org/syslog4j/syslog4j/0.9.46/syslog4j-0.9.46.jar"
+
+    Telegraf:
+      AddInstanceIdToTelegrafConf: |
+        #!/bin/bash -xe
+        export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+        sed -i "/  instance =/c\  instance = \"${INSTANCE_ID}\"" /etc/telegraf/telegraf.conf
+
+  Files:
+    Telegraf:
+      InfluxDbRepo: |
+        [influxdb]
+        name = InfluxDB Repository - RHEL
+        baseurl = https://repos.influxdata.com/rhel/7/x86_64/stable/
+        enabled = 1
+        gpgcheck = 1
+        gpgkey = https://repos.influxdata.com/influxdb.key
+
+      TelegrafConf: |
+        [global_tags]
+          stage = "{{influxTagStage}}"
+          product = "{{influxTagProduct}}"
+          region = "${AWS::Region}"
+          team = "{{influxTagTeam}}"
+          instance =
+        [agent]
+          interval = "10s"
+          round_interval = true
+          metric_batch_size = 1000
+          metric_buffer_limit = 10000
+          collection_jitter = "0s"
+          flush_interval = "10s"
+          flush_jitter = "0s"
+          precision = ""
+          debug = false
+          quiet = false
+          logfile = ""
+          hostname = ""
+          omit_hostname = false
+        [[outputs.influxdb]]
+          urls = ["http://{{influxHost}}:{{influxPort}}"]
+          database = "{{influxDatabase}}"
+        [[inputs.cpu]]
+          percpu = true
+          totalcpu = true
+          collect_cpu_time = false
+          report_active = false
+        [[inputs.disk]]
+          ignore_fs = ["tmpfs", "devtmpfs", "devfs", "overlay", "aufs", "squashfs"]
 
 Resources:
   securityGroup:
@@ -237,27 +309,53 @@ Resources:
         - !Ref securityGroup
       UserData:
         Fn::Base64: !Sub |
-           #!/bin/bash -x
-           yum update -y
-           echo "${project.version} - ${timestamp}"
-           echo "networkStackName: ${networkStackName}"
-           echo "cassandraStackName: ${cassandraStackName}"
-           echo "publicLoadBalancerStackName: ${publicLoadBalancerStackName}"
-           echo "redisStackName: ${redisStackName}"
-           echo "deployableBucketName: ${deployableBucketName}"
-           echo "deployableFileKey: ${deployableFileKey}"
-           echo "applicationContextPath: ${applicationContextPath}"
-           echo "papertrailHost: ${papertrailHost}"
-           echo "papertrailPort: ${papertrailPort}"
-           echo "instanceType: ${instanceType}"
-           echo "keyName: ${keyName}"
-           echo "authorizedKeys: ${authorizedKeys}"
-           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource launchConfiguration --region ${AWS::Region}
-           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource autoScalingGroup --region ${AWS::Region}
+          #!/bin/bash -x
+          yum update -y
+          echo "${project.version} - ${timestamp}"
+          echo "networkStackName: ${networkStackName}"
+          echo "cassandraStackName: ${cassandraStackName}"
+          echo "publicLoadBalancerStackName: ${publicLoadBalancerStackName}"
+          echo "redisStackName: ${redisStackName}"
+          echo "deployableBucketName: ${deployableBucketName}"
+          echo "deployableFileKey: ${deployableFileKey}"
+          echo "applicationContextPath: ${applicationContextPath}"
+          echo "papertrailHost: ${papertrailHost}"
+          echo "papertrailPort: ${papertrailPort}"
+          echo "instanceType: ${instanceType}"
+          echo "keyName: ${keyName}"
+          echo "authorizedKeys: ${authorizedKeys}"
+          echo "influxHost: ${influxHost}"
+          echo "influxPort: ${influxPort}"
+          echo "influxDatabase: ${influxDatabase}"
+          echo "influxTagStage: ${influxTagStage}"
+          echo "influxTagProduct: ${influxTagProduct}"
+          echo "influxTagTeam: ${influxTagTeam}"
+          if [ -n "${influxHost}" ]
+          then
+              CONFIG_SET=setup_with_telegraf
+          else
+              CONFIG_SET=setup_without_telegraf
+          fi
+          /opt/aws/bin/cfn-init -v --configsets $CONFIG_SET --stack ${AWS::StackName} --resource launchConfiguration --region ${AWS::Region}
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource autoScalingGroup --region ${AWS::Region}
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
-          setup:
+          setup_with_telegraf:
+            - "ssh_keys"
+            - "ntp"
+            - "haveged"
+            - "openjdk8"
+            - "add_influxdb_repo"
+            - "install_telegraf"
+            - "configure_telegraf"
+            - "start_telegraf"
+            - "install_tomcat"
+            - "install_logback"
+            - "configure_tomcat"
+            - "deploy_application"
+            - "run_tomcat"
+          setup_without_telegraf:
             - "ssh_keys"
             - "ntp"
             - "haveged"
@@ -303,6 +401,40 @@ Resources:
             yum:
               java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
               java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
+        add_influxdb_repo:
+          files:
+            /etc/yum.repos.d/influxdb.repo:
+              content: !FindInMap ["Files", "Telegraf", "InfluxDbRepo"]
+              owner: root
+              group: root
+              mode: "000644"
+        install_telegraf:
+          packages:
+            yum:
+              telegraf: []
+        configure_telegraf:
+          files:
+            /etc/telegraf/telegraf.conf:
+              content: !FindInMap ["Files", "Telegraf", "TelegrafConf"]
+              context:
+                influxHost: !Ref influxHost
+                influxPort: !Ref influxPort
+                influxDatabase: !Ref influxDatabase
+                influxTagStage: !Ref influxTagStage
+                influxTagProduct: !Ref influxTagProduct
+                influxTagTeam: !Ref influxTagTeam
+              owner: ec2-user
+              group: ec2-user
+              mode: "000644"
+          commands:
+            add_instance_id_to_telegraf_conf:
+              command: !FindInMap ["Scripts", "Telegraf", "AddInstanceIdToTelegrafConf"]
+        start_telegraf:
+          services:
+            sysvinit:
+              telegraf:
+                enabled: true
+                ensureRunning: true
         install_tomcat:
           commands:
             install_tomcat:
@@ -425,8 +557,8 @@ Resources:
               command: !Sub "aws s3 cp s3://${deployableBucketName}/${deployableFileKey} /opt/tomcat/webapps/${applicationContextPath}.war"
         run_tomcat:
           commands:
-             run_tomcat:
-               command: /opt/tomcat/bin/startup.sh
+            run_tomcat:
+              command: /opt/tomcat/bin/startup.sh
 
   autoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
@@ -441,23 +573,23 @@ Resources:
       HealthCheckType: ELB
       VPCZoneIdentifier:
         - Fn::Select:
-          - 0
-          - Fn::Split:
-            - ","
-            - Fn::ImportValue:
-                !Sub "${networkStackName}-private-subnets"
+            - 0
+            - Fn::Split:
+                - ","
+                - Fn::ImportValue:
+                    !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
-          - 1
-          - Fn::Split:
-            - ","
-            - Fn::ImportValue:
-                !Sub "${networkStackName}-private-subnets"
+            - 1
+            - Fn::Split:
+                - ","
+                - Fn::ImportValue:
+                    !Sub "${networkStackName}-private-subnets"
         - Fn::Select:
-          - 2
-          - Fn::Split:
-            - ","
-            - Fn::ImportValue:
-                !Sub "${networkStackName}-private-subnets"
+            - 2
+            - Fn::Split:
+                - ","
+                - Fn::ImportValue:
+                    !Sub "${networkStackName}-private-subnets"
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} AS

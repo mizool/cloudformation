@@ -52,12 +52,85 @@ Parameters:
     Type: String
     MinLength: 1
 
+  influxHost:
+    Type: String
+    Default: ""
+
+  influxPort:
+    Type: Number
+    Default: 8086
+
+  influxDatabase:
+    Type: String
+    Default: ""
+
+  influxTagStage:
+    Type: String
+    Default: ""
+
+  influxTagProduct:
+    Type: String
+    Default: ""
+
+  influxTagTeam:
+    Type: String
+    Default: ""
+
 Mappings:
   Regions:
     eu-central-1:
       AmazonLinux2Ami: ami-0f3a43fbf2d3899f7
     eu-west-1:
       AmazonLinux2Ami: ami-01f14919ba412de34
+
+  Scripts:
+    Telegraf:
+      AddInstanceIdToTelegrafConf: |
+        #!/bin/bash -xe
+        export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+        sed -i "/  instance =/c\  instance = \"${INSTANCE_ID}\"" /etc/telegraf/telegraf.conf
+
+  Files:
+    Telegraf:
+      InfluxDbRepo: |
+        [influxdb]
+        name = InfluxDB Repository - RHEL
+        baseurl = https://repos.influxdata.com/rhel/7/x86_64/stable/
+        enabled = 1
+        gpgcheck = 1
+        gpgkey = https://repos.influxdata.com/influxdb.key
+
+      TelegrafConf: |
+        [global_tags]
+          stage = "{{influxTagStage}}"
+          product = "{{influxTagProduct}}"
+          region = "${AWS::Region}"
+          team = "{{influxTagTeam}}"
+          instance =
+        [agent]
+          interval = "10s"
+          round_interval = true
+          metric_batch_size = 1000
+          metric_buffer_limit = 10000
+          collection_jitter = "0s"
+          flush_interval = "10s"
+          flush_jitter = "0s"
+          precision = ""
+          debug = false
+          quiet = false
+          logfile = ""
+          hostname = ""
+          omit_hostname = false
+        [[outputs.influxdb]]
+          urls = ["http://{{influxHost}}:{{influxPort}}"]
+          database = "{{influxDatabase}}"
+        [[inputs.cpu]]
+          percpu = true
+          totalcpu = true
+          collect_cpu_time = false
+          report_active = false
+        [[inputs.disk]]
+          ignore_fs = ["tmpfs", "devtmpfs", "devfs", "overlay", "aufs", "squashfs"]
 
 Conditions:
   vpcIsCloudFormationStack:
@@ -81,9 +154,9 @@ Resources:
       CidrBlock: !Select
         - 0
         - Fn::Cidr:
-          - !Ref cidrBlock
-          - "4"
-          - !Ref firstQuarteringCidrBits
+            - !Ref cidrBlock
+            - "4"
+            - !Ref firstQuarteringCidrBits
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
@@ -104,9 +177,9 @@ Resources:
       CidrBlock: !Select
         - 1
         - Fn::Cidr:
-          - !Ref cidrBlock
-          - "4"
-          - !Ref firstQuarteringCidrBits
+            - !Ref cidrBlock
+            - "4"
+            - !Ref firstQuarteringCidrBits
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
@@ -127,9 +200,9 @@ Resources:
       CidrBlock: !Select
         - 2
         - Fn::Cidr:
-          - !Ref cidrBlock
-          - "4"
-          - !Ref firstQuarteringCidrBits
+            - !Ref cidrBlock
+            - "4"
+            - !Ref firstQuarteringCidrBits
       MapPublicIpOnLaunch: false
       Tags:
         - Key: Name
@@ -151,14 +224,14 @@ Resources:
       CidrBlock: !Select
         - 0
         - Fn::Cidr:
-          - !Select
-            - 3
-            - Fn::Cidr:
-              - !Ref cidrBlock
-              - "4"
-              - !Ref firstQuarteringCidrBits
-          - "4"
-          - !Ref secondQuarteringCidrBits
+            - !Select
+              - 3
+              - Fn::Cidr:
+                  - !Ref cidrBlock
+                  - "4"
+                  - !Ref firstQuarteringCidrBits
+            - "4"
+            - !Ref secondQuarteringCidrBits
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Public Subnet AZ A
@@ -179,14 +252,14 @@ Resources:
       CidrBlock: !Select
         - 1
         - Fn::Cidr:
-          - !Select
-            - 3
-            - Fn::Cidr:
-              - !Ref cidrBlock
-              - "4"
-              - !Ref firstQuarteringCidrBits
-          - "4"
-          - !Ref secondQuarteringCidrBits
+            - !Select
+              - 3
+              - Fn::Cidr:
+                  - !Ref cidrBlock
+                  - "4"
+                  - !Ref firstQuarteringCidrBits
+            - "4"
+            - !Ref secondQuarteringCidrBits
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Public Subnet AZ B
@@ -207,14 +280,14 @@ Resources:
       CidrBlock: !Select
         - 2
         - Fn::Cidr:
-          - !Select
-            - 3
-            - Fn::Cidr:
-              - !Ref cidrBlock
-              - "4"
-              - !Ref firstQuarteringCidrBits
-          - "4"
-          - !Ref secondQuarteringCidrBits
+            - !Select
+              - 3
+              - Fn::Cidr:
+                  - !Ref cidrBlock
+                  - "4"
+                  - !Ref firstQuarteringCidrBits
+            - "4"
+            - !Ref secondQuarteringCidrBits
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Public Subnet AZ C
@@ -264,19 +337,16 @@ Resources:
 
   natGatewayAElasticIP:
     Type: AWS::EC2::EIP
-    DependsOn: vpcGatewayAttachment
     Properties:
       Domain: vpc
 
   natGatewayBElasticIP:
     Type: AWS::EC2::EIP
-    DependsOn: vpcGatewayAttachment
     Properties:
       Domain: vpc
 
   natGatewayCElasticIP:
     Type: AWS::EC2::EIP
-    DependsOn: vpcGatewayAttachment
     Properties:
       Domain: vpc
 
@@ -397,10 +467,10 @@ Resources:
               !Sub "${vpcStackName}-vpc"
           - !Ref vpcId
       SecurityGroupIngress:
-      - IpProtocol: tcp
-        FromPort: 22
-        ToPort: 22
-        CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Bastion Security Group
@@ -418,24 +488,43 @@ Resources:
         - !Ref bastionSecurityGroup
       UserData:
         Fn::Base64: !Sub |
-           #!/bin/bash -x
-           echo "${project.version} - ${timestamp}"
-           echo "vpcStackName: ${vpcStackName}"
-           echo "vpcId: ${vpcId}"
-           echo "internetGatewayId: ${internetGatewayId}"
-           echo "cidrBlock: ${cidrBlock}"
-           echo "firstQuarteringCidrBits: ${firstQuarteringCidrBits}"
-           echo "secondQuarteringCidrBits: ${secondQuarteringCidrBits}"
-           echo "keyName: ${keyName}"
-           echo "bastionInstanceType: ${bastionInstanceType}"
-           echo "bastionAuthorizedKeys: ${bastionAuthorizedKeys}"
-           yum update -y
-           /opt/aws/bin/cfn-init -v --configsets setup --stack ${AWS::StackName} --resource bastionLaunchConfiguration --region ${AWS::Region}
-           /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource bastionAutoScalingGroup --region ${AWS::Region}
+          #!/bin/bash -x
+          echo "${project.version} - ${timestamp}"
+          echo "vpcStackName: ${vpcStackName}"
+          echo "vpcId: ${vpcId}"
+          echo "internetGatewayId: ${internetGatewayId}"
+          echo "cidrBlock: ${cidrBlock}"
+          echo "firstQuarteringCidrBits: ${firstQuarteringCidrBits}"
+          echo "secondQuarteringCidrBits: ${secondQuarteringCidrBits}"
+          echo "keyName: ${keyName}"
+          echo "bastionInstanceType: ${bastionInstanceType}"
+          echo "bastionAuthorizedKeys: ${bastionAuthorizedKeys}"
+          echo "influxHost: ${influxHost}"
+          echo "influxPort: ${influxPort}"
+          echo "influxDatabase: ${influxDatabase}"
+          echo "influxTagStage: ${influxTagStage}"
+          echo "influxTagProduct: ${influxTagProduct}"
+          echo "influxTagTeam: ${influxTagTeam}"
+          yum update -y
+          if [ -n "${influxHost}" ]
+          then
+              CONFIG_SET=setup_with_telegraf
+          else
+              CONFIG_SET=setup_without_telegraf
+          fi
+          /opt/aws/bin/cfn-init -v --configsets $CONFIG_SET --stack ${AWS::StackName} --resource bastionLaunchConfiguration --region ${AWS::Region}
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource bastionAutoScalingGroup --region ${AWS::Region}
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
-          setup:
+          setup_with_telegraf:
+            - "ssh_keys"
+            - "ntp"
+            - "add_influxdb_repo"
+            - "install_telegraf"
+            - "configure_telegraf"
+            - "start_telegraf"
+          setup_without_telegraf:
             - "ssh_keys"
             - "ntp"
         ssh_keys:
@@ -460,6 +549,40 @@ Resources:
                 packages:
                   yum:
                     - ntp
+        add_influxdb_repo:
+          files:
+            /etc/yum.repos.d/influxdb.repo:
+              content: !FindInMap ["Files", "Telegraf", "InfluxDbRepo"]
+              owner: root
+              group: root
+              mode: "000644"
+        install_telegraf:
+          packages:
+            yum:
+              telegraf: []
+        configure_telegraf:
+          files:
+            /etc/telegraf/telegraf.conf:
+              content: !FindInMap ["Files", "Telegraf", "TelegrafConf"]
+              context:
+                influxHost: !Ref influxHost
+                influxPort: !Ref influxPort
+                influxDatabase: !Ref influxDatabase
+                influxTagStage: !Ref influxTagStage
+                influxTagProduct: !Ref influxTagProduct
+                influxTagTeam: !Ref influxTagTeam
+              owner: ec2-user
+              group: ec2-user
+              mode: "000644"
+          commands:
+            add_instance_id_to_telegraf_conf:
+              command: !FindInMap ["Scripts", "Telegraf", "AddInstanceIdToTelegrafConf"]
+        start_telegraf:
+          services:
+            sysvinit:
+              telegraf:
+                enabled: true
+                ensureRunning: true
 
   bastionAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
