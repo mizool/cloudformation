@@ -5,7 +5,7 @@
 
     <groupId>com.github.mizool.cloudformation</groupId>
     <artifactId>cloudformation</artifactId>
-    <version>0.5.1-SNAPSHOT</version>
+    <version>0.5.1</version>
     <packaging>pom</packaging>
 
     <name>${project.groupId}:${project.artifactId}</name>
