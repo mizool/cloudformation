@@ -467,7 +467,7 @@ Resources:
         haveged:
           packages:
             rpm:
-              haveged: "http://dl.fedoraproject.org/pub/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
+              haveged: "https://dl.fedoraproject.org/pub/archive/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
           services:
             sysvinit:
               haveged:
