@@ -15,7 +15,7 @@ Parameters:
     Description: The instance type used for the Cassandra Reaper node.
     Type: String
     MinLength: 1
-    Default: t2.small
+    Default: t3.small
 
   authorizedKeys:
     Description: A URL pointing to a list of authorized SSH keys to be appended as-is to ~/.ssh/authorized_keys.
