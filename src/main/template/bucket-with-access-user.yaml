@@ -33,13 +33,6 @@ Resources:
                         - !Ref bucketName
                         - "/*"
               - Effect: Allow
-                Resource:
-                  - Fn::Join:
-                      - ""
-                      - - "arn:aws:s3:::"
-                        - !Ref bucketName
-                        - "/*"
-              - Effect: Allow
                 Action:
                   - "s3:ListBucket"
                 Resource:
