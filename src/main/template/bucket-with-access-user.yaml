@@ -1,0 +1,86 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Deploys an S3 bucket with a user and key to access it.
+
+Parameters:
+  bucketName:
+    Description: The name of the bucket that is to be created.
+    Type: String
+    MinLength: 1
+
+Resources:
+  bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Ref bucketName
+
+  accessUser:
+    Type: AWS::IAM::User
+    Properties:
+      UserName: !Sub ${AWS::StackName}-access
+      Policies:
+        - PolicyName: !Sub ${AWS::StackName}-access-policy
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "s3:GetObject"
+                  - "s3:PutObject"
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - "arn:aws:s3:::"
+                        - !Ref bucketName
+                        - "/*"
+              - Effect: Allow
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - "arn:aws:s3:::"
+                        - !Ref bucketName
+                        - "/*"
+              - Effect: Allow
+                Action:
+                  - "s3:ListBucket"
+                Resource:
+                  - Fn::Join:
+                      - ""
+                      - - "arn:aws:s3:::"
+                        - !Ref bucketName
+              - Effect: Allow
+                Action:
+                  - "s3:GetBucketLocation"
+                  - "s3:ListAllMyBuckets"
+                Resource:
+                  - "*"
+
+  accessKey:
+    Type: AWS::IAM::AccessKey
+    Properties:
+      Serial: 1
+      UserName: !Ref accessUser
+
+Outputs:
+  Bucket:
+    Description: The created bucket.
+    Value: !Ref bucket
+    Export:
+      Name: !Sub ${AWS::StackName}-bucket
+
+  AccessUser:
+    Description: The created user for accessing the bucket.
+    Value: !Ref accessUser
+    Export:
+      Name: !Sub ${AWS::StackName}-access-user
+
+  AccessKeyId:
+    Description: The access key id that can be used to access the bucket.
+    Value: !Ref accessKey
+    Export:
+      Name: !Sub ${AWS::StackName}-access-key-id
+
+  SecretAccessKey:
+    Description: The secret access key that can be used to access the bucket.
+    Value: !GetAtt [ accessKey, SecretAccessKey ]
+    Export:
+      Name: !Sub ${AWS::StackName}-secret-access-key
