@@ -1,0 +1,243 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: Deploys a database in RDS.
+
+Parameters:
+  vpcStackName:
+    Description: The name of an existing VPC stack in which the database will be deployed.
+    Type: String
+    MinLength: 1
+
+  masterUsername:
+    Description: The user name for the admin account.
+    Type: String
+    Default: dbadmin
+    MinLength: 1
+
+  masterUserPassword:
+    Description: The password for the admin account.
+    Type: String
+    MinLength: 8
+    NoEcho: true
+
+  engine:
+    Description: The database engine being used, mysql or postgres.
+    Type: String
+    MinLength: 1
+    Default: mysql
+    AllowedValues:
+      - mysql
+      - postgres
+
+  reachability:
+    Description: Whether the database should be publicly reachable or not.
+    Type: String
+    MinLength: 1
+    Default: private
+    AllowedValues:
+      - public
+      - private
+
+  instanceType:
+    Description: The RDS instance type to use.
+    Type: String
+    MinLength: 1
+    Default: db.t3.small
+    AllowedValues:
+      - db.t3.micro
+      - db.t3.small
+      - db.t3.medium
+      - db.t3.large
+      - db.t3.xlarge
+      - db.t3.2xlarge
+      - db.r5.large
+      - db.r5.xlarge
+      - db.r5.2xlarge
+      - db.m5.large
+      - db.m5.xlarge
+      - db.m5.2xlarge
+
+  storageSize:
+    Description: The storage size, in gigabytes.
+    Type: Number
+    MinValue: 5
+    Default: 20
+
+  defaultSchemaName:
+    Description: The name of a default database schema, if one should be created.
+    Type: String
+
+Conditions:
+  isPublic: !Equals [ !Ref reachability, public ]
+
+  createPublicMySQLIngress:
+    Fn::And:
+      - !Equals [ !Ref engine, mysql ]
+      - !Equals [ !Ref reachability, public ]
+
+  createPrivateMySQLIngress:
+    Fn::And:
+      - !Equals [ !Ref engine, mysql ]
+      - !Equals [ !Ref reachability, private ]
+
+  createPublicPostgresIngress:
+    Fn::And:
+      - !Equals [ !Ref engine, postgres ]
+      - !Equals [ !Ref reachability, public ]
+
+  createPrivatePostgresIngress:
+    Fn::And:
+      - !Equals [ !Ref engine, postgres ]
+      - !Equals [ !Ref reachability, private ]
+
+Resources:
+  securityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${AWS::StackName} Security Group
+      GroupDescription: !Sub ${AWS::StackName} Security Group
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-vpc"
+      Tags:
+        - Key: Name
+          Value: !Sub ${AWS::StackName} Security Group
+
+  public3306Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: createPublicMySQLIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      CidrIp: 0.0.0.0/0
+
+  private3306Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: createPrivateMySQLIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 3306
+      ToPort: 3306
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-bastion-security-group"
+
+  public5432Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: createPublicPostgresIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      CidrIp: 0.0.0.0/0
+
+  private5432Ingress:
+    Type: AWS::EC2::SecurityGroupIngress
+    Condition: createPrivatePostgresIngress
+    Properties:
+      GroupId: !Ref securityGroup
+      IpProtocol: tcp
+      FromPort: 5432
+      ToPort: 5432
+      SourceSecurityGroupId:
+        Fn::ImportValue:
+          !Sub "${vpcStackName}-bastion-security-group"
+
+  subnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub ${AWS::StackName}-database-subnet-group
+      SubnetIds:
+        - Fn::Select:
+          - 0
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                Fn::If:
+                  - isPublic
+                  - !Sub "${vpcStackName}-public-subnets"
+                  - !Sub "${vpcStackName}-private-subnets"
+        - Fn::Select:
+          - 1
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                Fn::If:
+                  - isPublic
+                  - !Sub "${vpcStackName}-public-subnets"
+                  - !Sub "${vpcStackName}-private-subnets"
+        - Fn::Select:
+          - 2
+          - Fn::Split:
+            - ","
+            - Fn::ImportValue:
+                Fn::If:
+                  - isPublic
+                  - !Sub "${vpcStackName}-public-subnets"
+                  - !Sub "${vpcStackName}-private-subnets"
+
+  dbInstance:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      PubliclyAccessible:
+        Fn::If:
+          - isPublic
+          - true
+          - false
+      DBName: !Ref defaultSchemaName
+      DBInstanceIdentifier: !Sub ${AWS::StackName}-database
+      AllocatedStorage: !Ref storageSize
+      DBInstanceClass: !Ref instanceType
+      Engine: !Ref engine
+      MasterUsername: !Ref masterUsername
+      MasterUserPassword: !Ref masterUserPassword
+      DBSubnetGroupName: !Ref subnetGroup
+      VPCSecurityGroups:
+        - !Ref securityGroup
+
+Outputs:
+  JdbcUrl:
+    Description: The JDBC url to connect to the service database.
+    Value:
+      Fn::Join:
+        - ""
+        - - "jdbc:"
+          - !Ref engine
+          - "://"
+          - !GetAtt [ dbInstance, Endpoint.Address ]
+          - ":"
+          - !GetAtt [ dbInstance, Endpoint.Port ]
+          - "/"
+          - !Ref defaultSchemaName
+          - "?user="
+          - !Ref masterUsername
+          - "&password="
+          - !Ref masterUserPassword
+    Export:
+      Name: !Sub ${AWS::StackName}-jdbc-url
+
+  Host:
+    Description: The host (and port) of the database.
+    Value:
+      Fn::Join:
+        - ""
+        - - !GetAtt [ dbInstance, Endpoint.Address ]
+          - ":"
+          - !GetAtt [ dbInstance, Endpoint.Port ]
+    Export:
+      Name: !Sub ${AWS::StackName}-host
+
+  MasterUsername:
+    Description: The user name of the master user.
+    Value: !Ref masterUsername
+    Export:
+      Name: !Sub ${AWS::StackName}-master-username
+
+  MasterUserPassword:
+    Description: The password of the master user.
+    Value: !Ref masterUserPassword
+    Export:
+      Name: !Sub ${AWS::StackName}-master-user-password
