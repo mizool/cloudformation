@@ -1,7 +1,8 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: This template deploys a Cassandra stack into an existing network stack. The Cassandra stack consists of
-  three seed node instances, and an autoscaling group for additional instances. Note that scaling down is harder than
-  scaling up. There is no automatism that decommissions on termination, so this needs to be done manually.
+  up to three seed node instances, and an autoscaling group for additional instances, that need to be configured/started
+  manually. Note that scaling down is harder than scaling up. There is no automatism that decommissions on termination,
+  so this needs to be done manually.
 
 Parameters:
   networkStackName:
@@ -60,6 +61,19 @@ Parameters:
       - "false"
     Default: "true"
 
+  usedAvailabilityZones:
+    Description: The amount of availability zones over which to distribute the cluster.
+    Type: Number
+    MinValue: 1
+    MaxValue: 3
+    Default: 3
+
+  volumeSize:
+    Description: The initial size of the data volumes.
+    Type: Number
+    MinValue: 32
+    Default: 1024
+
   influxHost:
     Type: String
     Default: ""
@@ -83,6 +97,15 @@ Parameters:
   influxTagTeam:
     Type: String
     Default: ""
+
+Conditions:
+  useSecondAvailabilityZone:
+    Fn::Or:
+      - Fn::Equals: [ !Ref usedAvailabilityZones, 2 ]
+      - Fn::Equals: [ !Ref usedAvailabilityZones, 3 ]
+
+  useThirdAvailabilityZone:
+    Fn::Equals: [ !Ref usedAvailabilityZones, 3 ]
 
 Mappings:
   Regions:
@@ -176,6 +199,36 @@ Mappings:
         #!/bin/bash -xe
         export CASSANDRA_YAML="/etc/cassandra/conf/cassandra.yaml"
         echo 'auto_bootstrap: false' >> ${CASSANDRA_YAML}
+
+      RegisterDns: |
+        #!/bin/bash -xe
+        if [ $# -lt 1 ]; then
+            echo "Syntax: register-dns.sh [a/b/c]"
+            exit 1
+        fi
+        export HOSTNAME=$(hostname -I)
+        echo '{"Changes": [{"Action": "UPSERT", "ResourceRecordSet": {"Name": "$1.seed.{{internalDomain}}", "Type": "A", "TTL": 60, "ResourceRecords": [{"Value": "${HOSTNAME}"}]}}]}' > /home/ec2-user/change-batch.json
+        aws route53 change-resource-record-sets --hosted-zone-id {{hostedZone}} --change-batch file:///home/ec2-user/change-batch.json
+        rm /home/ec2-user/change-batch.json
+        echo "${HOSTNAME} $1.seed.{{internalDomain}}" >> /etc/hosts
+
+      CassandraWatchdog: |
+        #!/bin/bash
+        CASSANDRA_PID=`cat /run/cassandra/cassandra.pid`
+        case "$(ps ax |grep -v grep |grep -c $CASSANDRA_PID)" in
+                0) echo "`date --iso-8601=seconds` Cassandra process crashed">>/home/ec2-user/cassandraWatchdog.log
+                sudo service cassandra stop
+                sleep 1
+                sudo service cassandra start
+                exit
+        esac
+        nodetool info &> /dev/null
+        if [ "$?" -eq "1" ]; then
+                echo "`date --iso-8601=seconds` Nodetool info not responding">>/home/ec2-user/cassandraWatchdog.log
+                sudo service cassandra stop
+                sleep 1
+                sudo service cassandra start
+        fi
 
     Telegraf:
       AddInstanceIdToTelegrafConf: |
@@ -361,6 +414,7 @@ Resources:
 
   seedA:
     Type: "AWS::EC2::Instance"
+    UpdateReplacePolicy: Retain
     Properties:
       ImageId: !FindInMap
         - Regions
@@ -380,7 +434,7 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: "/dev/sdf"
           Ebs:
-            VolumeSize: 1024
+            VolumeSize: !Ref VolumeSize
             VolumeType: "gp2"
             DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
         - DeviceName: "/dev/sdg"
@@ -630,6 +684,8 @@ Resources:
 
   seedB:
     Type: "AWS::EC2::Instance"
+    Condition: useSecondAvailabilityZone
+    UpdateReplacePolicy: Retain
     Properties:
       ImageId: !FindInMap
         - Regions
@@ -649,7 +705,7 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: "/dev/sdf"
           Ebs:
-            VolumeSize: 1024
+            VolumeSize: !Ref volumeSize
             VolumeType: "gp2"
             DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
         - DeviceName: "/dev/sdg"
@@ -889,6 +945,7 @@ Resources:
 
   seedBDnsRecord:
     Type: AWS::Route53::RecordSet
+    Condition: useSecondAvailabilityZone
     Properties:
       HostedZoneId: !Ref hostedZone
       Name: !Sub "b.seed.${internalDomain}"
@@ -899,6 +956,8 @@ Resources:
 
   seedC:
     Type: "AWS::EC2::Instance"
+    Condition: useThirdAvailabilityZone
+    UpdateReplacePolicy: Retain
     Properties:
       ImageId: !FindInMap
         - Regions
@@ -1158,6 +1217,7 @@ Resources:
 
   seedCDnsRecord:
     Type: AWS::Route53::RecordSet
+    Condition: useThirdAvailabilityZone
     Properties:
       HostedZoneId: !Ref hostedZone
       Name: !Sub "c.seed.${internalDomain}"
@@ -1181,7 +1241,7 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: "/dev/sdf"
           Ebs:
-            VolumeSize: 1024
+            VolumeSize: !Ref volumeSize
             VolumeType: "gp2"
             DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
         - DeviceName: "/dev/sdg"
@@ -1217,8 +1277,8 @@ Resources:
             - "add_cassandra_repo"
             - "install_cassandra"
             - "configure_cassandra"
-            - "start_cassandra"
-            - "ensure_cassandra_is_running"
+            - "cassandra_watchdog"
+            - "create_dns_script"
           setup_without_telegraf:
             - "ssh_keys"
             - "ntp"
@@ -1227,8 +1287,8 @@ Resources:
             - "add_cassandra_repo"
             - "install_cassandra"
             - "configure_cassandra"
-            - "start_cassandra"
-            - "ensure_cassandra_is_running"
+            - "cassandra_watchdog"
+            - "create_dns_script"
         ssh_keys:
           files:
             /home/ec2-user/.ssh/additional_keys:
@@ -1340,18 +1400,23 @@ Resources:
               command: !FindInMap ["Scripts", "Cassandra", "UpdateJvmOptions"]
             06_update_cassandra_rackdc_properties:
               command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraRackdcProperties"]
-        start_cassandra:
-          services:
-            sysvinit:
-              cassandra:
-                enabled: true
-                ensureRunning: true
-        ensure_cassandra_is_running:
-          commands:
-            01_sleep:
-              command: sleep 60
-            02_check:
-              command: nodetool info
+        cassandra_watchdog:
+          files:
+            /etc/cron.hourly/cassandra-watchdog.sh:
+              content: !FindInMap ["Scripts", "Cassandra", "CassandraWatchdog"]
+              owner: root
+              group: root
+              mode: "000755"
+        create_dns_script:
+          files:
+            /home/ec2-user/register-dns.sh:
+              content: !FindInMap ["Scripts", "Cassandra", "RegisterDns"]
+              context:
+                internalDomain: !Ref internalDomain
+                hostedZone: !Ref hostedZone
+              owner: ec2-user
+              group: ec2-user
+              mode: "000755"
 
   autoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
@@ -1371,18 +1436,24 @@ Resources:
                 - ","
                 - Fn::ImportValue:
                     !Sub "${networkStackName}-private-subnets"
-        - Fn::Select:
+        - Fn::If:
+          - useSecondAvailabilityZone
+          - Fn::Select:
             - 1
             - Fn::Split:
                 - ","
                 - Fn::ImportValue:
                     !Sub "${networkStackName}-private-subnets"
-        - Fn::Select:
+          - !Ref AWS::NoValue
+        - Fn::If:
+          - useThirdAvailabilityZone
+          - Fn::Select:
             - 2
             - Fn::Split:
                 - ","
                 - Fn::ImportValue:
                     !Sub "${networkStackName}-private-subnets"
+          - !Ref AWS::NoValue
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} AS
