@@ -64,6 +64,13 @@ Parameters:
     MinLength: 1
     Default: presto
 
+  usedAvailabilityZones:
+    Description: The amount of availability zones over which to distribute the cluster.
+    Type: Number
+    MinValue: 1
+    MaxValue: 3
+    Default: 3
+
   influxHost:
     Type: String
     Default: ""
@@ -87,6 +94,15 @@ Parameters:
   influxTagTeam:
     Type: String
     Default: ""
+
+Conditions:
+  useSecondAvailabilityZone:
+    Fn::Or:
+      - Fn::Equals: [ !Ref usedAvailabilityZones, 2 ]
+      - Fn::Equals: [ !Ref usedAvailabilityZones, 3 ]
+
+  useThirdAvailabilityZone:
+    Fn::Equals: [ !Ref usedAvailabilityZones, 3 ]
 
 Mappings:
   Regions:
@@ -904,18 +920,24 @@ Resources:
                 - ","
                 - Fn::ImportValue:
                     !Sub "${networkStackName}-private-subnets"
-        - Fn::Select:
+        - Fn::If:
+          - useSecondAvailabilityZone
+          - Fn::Select:
             - 1
             - Fn::Split:
                 - ","
                 - Fn::ImportValue:
                     !Sub "${networkStackName}-private-subnets"
-        - Fn::Select:
+          - !Ref AWS::NoValue
+        - Fn::If:
+          - useThirdAvailabilityZone
+          - Fn::Select:
             - 2
             - Fn::Split:
                 - ","
                 - Fn::ImportValue:
                     !Sub "${networkStackName}-private-subnets"
+          - !Ref AWS::NoValue
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Coordinator
@@ -942,18 +964,24 @@ Resources:
                 - ","
                 - Fn::ImportValue:
                     !Sub "${networkStackName}-private-subnets"
-        - Fn::Select:
+        - Fn::If:
+          - useSecondAvailabilityZone
+          - Fn::Select:
             - 1
             - Fn::Split:
                 - ","
                 - Fn::ImportValue:
                     !Sub "${networkStackName}-private-subnets"
-        - Fn::Select:
+          - !Ref AWS::NoValue
+        - Fn::If:
+          - useThirdAvailabilityZone
+          - Fn::Select:
             - 2
             - Fn::Split:
                 - ","
                 - Fn::ImportValue:
                     !Sub "${networkStackName}-private-subnets"
+          - !Ref AWS::NoValue
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} Worker
