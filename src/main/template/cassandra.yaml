@@ -1,7 +1,8 @@
 AWSTemplateFormatVersion: 2010-09-09
 Description: This template deploys a Cassandra stack into an existing network stack. The Cassandra stack consists of
-  three seed node instances, and an autoscaling group for additional instances. Note that scaling down is harder than
-  scaling up. There is no automatism that decommissions on termination, so this needs to be done manually.
+  up to three seed node instances, and an autoscaling group for additional instances, that need to be configured/started
+  manually. Note that scaling down is harder than scaling up. There is no automatism that decommissions on termination,
+  so this needs to be done manually.
 
 Parameters:
   networkStackName:
@@ -60,6 +61,19 @@ Parameters:
       - "false"
     Default: "true"
 
+  usedAvailabilityZones:
+    Description: The amount of availability zones over which to distribute the cluster.
+    Type: Number
+    MinValue: 1
+    MaxValue: 3
+    Default: 3
+
+  volumeSize:
+    Description: The initial size of the data volumes.
+    Type: Number
+    MinValue: 32
+    Default: 1024
+
   influxHost:
     Type: String
     Default: ""
@@ -83,6 +97,15 @@ Parameters:
   influxTagTeam:
     Type: String
     Default: ""
+
+Conditions:
+  useSecondAvailabilityZone:
+    Fn::Or:
+      - Fn::Equals: [ !Ref usedAvailabilityZones, 2 ]
+      - Fn::Equals: [ !Ref usedAvailabilityZones, 3 ]
+
+  useThirdAvailabilityZone:
+    Fn::Equals: [ !Ref usedAvailabilityZones, 3 ]
 
 Mappings:
   Regions:
@@ -173,9 +196,40 @@ Mappings:
         sed -i "/#dc_suffix=/c\dc_suffix=${DATACENTER_NAME_SUFFIX}" ${CASSANDRA_RACKDC_PROPERTIES}
 
       DisableBootstrapping: |
-        #!/bin/bash -xe
+        #!/bin/bash -x
         export CASSANDRA_YAML="/etc/cassandra/conf/cassandra.yaml"
         echo 'auto_bootstrap: false' >> ${CASSANDRA_YAML}
+
+      RegisterDns: |
+        #!/bin/bash -e
+        if [ $# -lt 1 ]; then
+            echo "Syntax: register-dns.sh [a/b/c]"
+            exit 1
+        fi
+        export HOSTNAME=$(hostname -I)
+        export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
+        echo "{\"Changes\": [{\"Action\": \"UPSERT\", \"ResourceRecordSet\": {\"Name\": \"$1.seed.{{internalDomain}}\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"${HOSTNAME}\"}]}}]}" > /home/ec2-user/change-batch.json
+        aws route53 change-resource-record-sets --hosted-zone-id {{hostedZone}} --change-batch file:///home/ec2-user/change-batch.json
+        rm /home/ec2-user/change-batch.json
+        echo "${HOSTNAME} $1.seed.{{internalDomain}}" | sudo tee -a /etc/hosts
+
+      CassandraWatchdog: |
+        #!/bin/bash
+        CASSANDRA_PID=`cat /run/cassandra/cassandra.pid`
+        case "$(ps ax |grep -v grep |grep -c $CASSANDRA_PID)" in
+                0) echo "`date --iso-8601=seconds` Cassandra process crashed">>/home/ec2-user/cassandraWatchdog.log
+                sudo service cassandra stop
+                sleep 1
+                sudo service cassandra start
+                exit
+        esac
+        nodetool info &> /dev/null
+        if [ "$?" -eq "1" ]; then
+                echo "`date --iso-8601=seconds` Nodetool info not responding">>/home/ec2-user/cassandraWatchdog.log
+                sudo service cassandra stop
+                sleep 1
+                sudo service cassandra start
+        fi
 
     Telegraf:
       AddInstanceIdToTelegrafConf: |
@@ -359,813 +413,6 @@ Resources:
       Roles:
         - !Ref allowRoute53RecordSetManagementRole
 
-  seedA:
-    Type: "AWS::EC2::Instance"
-    Properties:
-      ImageId: !FindInMap
-        - Regions
-        - !Ref AWS::Region
-        - AmazonLinux2Ami
-      KeyName: !Ref keyName
-      InstanceType: !Ref instanceType
-      IamInstanceProfile: !Ref instanceProfile
-      SecurityGroupIds:
-        - !Ref securityGroup
-      SubnetId: !Select
-        - 0
-        - Fn::Split:
-            - ","
-            - Fn::ImportValue:
-                !Sub "${networkStackName}-private-subnets"
-      BlockDeviceMappings:
-        - DeviceName: "/dev/sdf"
-          Ebs:
-            VolumeSize: 1024
-            VolumeType: "gp2"
-            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
-        - DeviceName: "/dev/sdg"
-          Ebs:
-            VolumeSize: 64
-            VolumeType: "gp2"
-            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
-      Tags:
-        - Key: Name
-          Value: !Sub ${AWS::StackName} Seed A
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash -x
-          echo "${project.version} - ${timestamp}"
-          yum update -y
-          if [ -n "${influxHost}" ]
-          then
-              CONFIG_SET=setup_with_telegraf
-          else
-              CONFIG_SET=setup_without_telegraf
-          fi
-          /opt/aws/bin/cfn-init -v --configsets $CONFIG_SET --stack ${AWS::StackName} --resource seedA --region ${AWS::Region}
-          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedA --region ${AWS::Region}
-    CreationPolicy:
-      ResourceSignal:
-        Timeout: PT5M
-    Metadata:
-      AWS::CloudFormation::Init:
-        configSets:
-          setup_with_telegraf:
-            - "ssh_keys"
-            - "ntp"
-            - "haveged"
-            - "openjdk8"
-            - "aws_cli"
-            - "register_dns"
-            - "add_influxdb_repo"
-            - "install_telegraf"
-            - "configure_telegraf"
-            - "start_telegraf"
-            - "add_cassandra_repo"
-            - "install_cassandra"
-            - "configure_cassandra"
-            - "disable_bootstrapping"
-            - "start_cassandra"
-            - "ensure_cassandra_is_running"
-            - "unregister_dns"
-          setup_without_telegraf:
-            - "ssh_keys"
-            - "ntp"
-            - "haveged"
-            - "openjdk8"
-            - "aws_cli"
-            - "register_dns"
-            - "add_cassandra_repo"
-            - "install_cassandra"
-            - "configure_cassandra"
-            - "disable_bootstrapping"
-            - "start_cassandra"
-            - "ensure_cassandra_is_running"
-            - "unregister_dns"
-        ssh_keys:
-          files:
-            /home/ec2-user/.ssh/additional_keys:
-              source: !Ref authorizedKeys
-              owner: root
-              group: root
-              mode: "000644"
-          commands:
-            register_additional_keys:
-              command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
-        ntp:
-          packages:
-            yum:
-              ntp: []
-          services:
-            sysvinit:
-              ntpd:
-                enabled: true
-                ensureRunning: true
-                packages:
-                  yum:
-                    - ntp
-        haveged:
-          packages:
-            rpm:
-              haveged: "https://dl.fedoraproject.org/pub/archive/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
-          services:
-            sysvinit:
-              haveged:
-                enabled: true
-                ensureRunning: true
-        openjdk8:
-          packages:
-            yum:
-              java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
-              java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
-        aws_cli:
-          files:
-            /home/ec2-user/.aws/config:
-              content: !Sub |
-                [default]
-                region=${AWS::Region}
-                output=json
-              owner: ec2-user
-              group: ec2-user
-              mode: "000644"
-        add_influxdb_repo:
-          files:
-            /etc/yum.repos.d/influxdb.repo:
-              content: !FindInMap ["Files", "Telegraf", "InfluxDbRepo"]
-              owner: root
-              group: root
-              mode: "000644"
-        install_telegraf:
-          packages:
-            yum:
-              telegraf: []
-        configure_telegraf:
-          files:
-            /etc/telegraf/telegraf.conf:
-              content: !FindInMap ["Files", "Telegraf", "TelegrafConf"]
-              context:
-                influxHost: !Ref influxHost
-                influxPort: !Ref influxPort
-                influxDatabase: !Ref influxDatabase
-                influxTagStage: !Ref influxTagStage
-                influxTagProduct: !Ref influxTagProduct
-                influxTagTeam: !Ref influxTagTeam
-              owner: ec2-user
-              group: ec2-user
-              mode: "000644"
-          commands:
-            add_instance_id_to_telegraf_conf:
-              command: !FindInMap ["Scripts", "Telegraf", "AddInstanceIdToTelegrafConf"]
-        start_telegraf:
-          services:
-            sysvinit:
-              telegraf:
-                enabled: true
-                ensureRunning: true
-        add_cassandra_repo:
-          files:
-            /etc/yum.repos.d/cassandra.repo:
-              content: |
-                [cassandra]
-                name=Apache Cassandra
-                baseurl=https://www.apache.org/dist/cassandra/redhat/311x/
-                gpgcheck=1
-                repo_gpgcheck=1
-                gpgkey=https://www.apache.org/dist/cassandra/KEYS
-              owner: root
-              group: root
-              mode: "000644"
-        install_cassandra:
-          packages:
-            yum:
-              cassandra: []
-        configure_cassandra:
-          commands:
-            01_configure_hosts:
-              command: !FindInMap ["Scripts", "Cassandra", "CreateHostsEntry"]
-            02_setup_data_directories:
-              command: !FindInMap ["Scripts", "Cassandra", "SetupDataDirectories"]
-            03_update_cassandra_yaml:
-              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraYaml"]
-              env:
-                CLUSTER_NAME: !Ref clusterName
-                SEED_NODES: !Join
-                  - ""
-                  - - "a.seed."
-                    - !Ref internalDomain
-                    - ",b.seed."
-                    - !Ref internalDomain
-                    - ",c.seed."
-                    - !Ref internalDomain
-            04_update_cassandra_env_sh:
-              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraEnvSh"]
-            05_update_jvm_options:
-              command: !FindInMap ["Scripts", "Cassandra", "UpdateJvmOptions"]
-            06_update_cassandra_rackdc_properties:
-              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraRackdcProperties"]
-        disable_bootstrapping:
-          commands:
-            disable_bootstrapping:
-              command: !FindInMap ["Scripts", "Cassandra", "DisableBootstrapping"]
-        register_dns:
-          commands:
-            01_create_change_batch:
-              command: !Join
-                - ""
-                - - "echo '{\"Changes\": [{\"Action\": \"UPSERT\", \"ResourceRecordSet\": {\"Name\": \"a.seed."
-                  - !Ref internalDomain
-                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
-            02_register_dns:
-              command: !Join
-                - ""
-                - - "aws route53 change-resource-record-sets --hosted-zone-id "
-                  - !Ref hostedZone
-                  - " --change-batch file:///home/ec2-user/change-batch.json"
-            03_remove_change_batch:
-              command: "rm /home/ec2-user/change-batch.json"
-            04_add_hosts_entry:
-              command: !Join
-                - ""
-                - - "echo \"$(hostname -I) a.seed."
-                  - !Ref internalDomain
-                  - "\" >> /etc/hosts"
-        start_cassandra:
-          services:
-            sysvinit:
-              cassandra:
-                enabled: true
-                ensureRunning: true
-        ensure_cassandra_is_running:
-          commands:
-            01_sleep:
-              command: sleep 60
-            02_check:
-              command: nodetool info
-        unregister_dns:
-          commands:
-            01_create_change_batch:
-              command: !Join
-                - ""
-                - - "echo '{\"Changes\": [{\"Action\": \"DELETE\", \"ResourceRecordSet\": {\"Name\": \"a.seed."
-                  - !Ref internalDomain
-                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
-            02_unregister_dns:
-              command: !Join
-                - ""
-                - - "aws route53 change-resource-record-sets --hosted-zone-id "
-                  - !Ref hostedZone
-                  - " --change-batch file:///home/ec2-user/change-batch.json"
-            03_remove_change_batch:
-              command: "rm /home/ec2-user/change-batch.json"
-
-  seedADnsRecord:
-    Type: AWS::Route53::RecordSet
-    Properties:
-      HostedZoneId: !Ref hostedZone
-      Name: !Sub "a.seed.${internalDomain}"
-      Type: A
-      TTL: 60
-      ResourceRecords:
-        - !GetAtt seedA.PrivateIp
-
-  seedB:
-    Type: "AWS::EC2::Instance"
-    Properties:
-      ImageId: !FindInMap
-        - Regions
-        - !Ref AWS::Region
-        - AmazonLinux2Ami
-      KeyName: !Ref keyName
-      InstanceType: !Ref instanceType
-      IamInstanceProfile: !Ref instanceProfile
-      SecurityGroupIds:
-        - !Ref securityGroup
-      SubnetId: !Select
-        - 1
-        - Fn::Split:
-            - ","
-            - Fn::ImportValue:
-                !Sub "${networkStackName}-private-subnets"
-      BlockDeviceMappings:
-        - DeviceName: "/dev/sdf"
-          Ebs:
-            VolumeSize: 1024
-            VolumeType: "gp2"
-            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
-        - DeviceName: "/dev/sdg"
-          Ebs:
-            VolumeSize: 64
-            VolumeType: "gp2"
-            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
-      Tags:
-        - Key: Name
-          Value: !Sub ${AWS::StackName} Seed B
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash -x
-          echo "${project.version} - ${timestamp}"
-          yum update -y
-          if [ -n "${influxHost}" ]
-          then
-              CONFIG_SET=setup_with_telegraf
-          else
-              CONFIG_SET=setup_without_telegraf
-          fi
-          /opt/aws/bin/cfn-init -v --configsets $CONFIG_SET --stack ${AWS::StackName} --resource seedB --region ${AWS::Region}
-          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedB --region ${AWS::Region}
-    CreationPolicy:
-      ResourceSignal:
-        Timeout: PT5M
-    Metadata:
-      AWS::CloudFormation::Init:
-        configSets:
-          setup_with_telegraf:
-            - "ssh_keys"
-            - "ntp"
-            - "haveged"
-            - "openjdk8"
-            - "aws_cli"
-            - "register_dns"
-            - "add_influxdb_repo"
-            - "install_telegraf"
-            - "configure_telegraf"
-            - "start_telegraf"
-            - "add_cassandra_repo"
-            - "install_cassandra"
-            - "configure_cassandra"
-            - "disable_bootstrapping"
-            - "start_cassandra"
-            - "ensure_cassandra_is_running"
-            - "unregister_dns"
-          setup_without_telegraf:
-            - "ssh_keys"
-            - "ntp"
-            - "haveged"
-            - "openjdk8"
-            - "aws_cli"
-            - "register_dns"
-            - "add_cassandra_repo"
-            - "install_cassandra"
-            - "configure_cassandra"
-            - "disable_bootstrapping"
-            - "start_cassandra"
-            - "ensure_cassandra_is_running"
-            - "unregister_dns"
-        ssh_keys:
-          files:
-            /home/ec2-user/.ssh/additional_keys:
-              source: !Ref authorizedKeys
-              owner: root
-              group: root
-              mode: "000644"
-          commands:
-            register_additional_keys:
-              command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
-        ntp:
-          packages:
-            yum:
-              ntp: []
-          services:
-            sysvinit:
-              ntpd:
-                enabled: true
-                ensureRunning: true
-                packages:
-                  yum:
-                    - ntp
-        haveged:
-          packages:
-            rpm:
-              haveged: "https://dl.fedoraproject.org/pub/archive/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
-          services:
-            sysvinit:
-              haveged:
-                enabled: true
-                ensureRunning: true
-        openjdk8:
-          packages:
-            yum:
-              java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
-              java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
-        aws_cli:
-          files:
-            /home/ec2-user/.aws/config:
-              content: !Sub |
-                [default]
-                region=${AWS::Region}
-                output=json
-              owner: ec2-user
-              group: ec2-user
-              mode: "000644"
-        add_influxdb_repo:
-          files:
-            /etc/yum.repos.d/influxdb.repo:
-              content: !FindInMap ["Files", "Telegraf", "InfluxDbRepo"]
-              owner: root
-              group: root
-              mode: "000644"
-        install_telegraf:
-          packages:
-            yum:
-              telegraf: []
-        configure_telegraf:
-          files:
-            /etc/telegraf/telegraf.conf:
-              content: !FindInMap ["Files", "Telegraf", "TelegrafConf"]
-              context:
-                influxHost: !Ref influxHost
-                influxPort: !Ref influxPort
-                influxDatabase: !Ref influxDatabase
-                influxTagStage: !Ref influxTagStage
-                influxTagProduct: !Ref influxTagProduct
-                influxTagTeam: !Ref influxTagTeam
-              owner: ec2-user
-              group: ec2-user
-              mode: "000644"
-          commands:
-            add_instance_id_to_telegraf_conf:
-              command: !FindInMap ["Scripts", "Telegraf", "AddInstanceIdToTelegrafConf"]
-        start_telegraf:
-          services:
-            sysvinit:
-              telegraf:
-                enabled: true
-                ensureRunning: true
-        add_cassandra_repo:
-          files:
-            /etc/yum.repos.d/cassandra.repo:
-              content: |
-                [cassandra]
-                name=Apache Cassandra
-                baseurl=https://www.apache.org/dist/cassandra/redhat/311x/
-                gpgcheck=1
-                repo_gpgcheck=1
-                gpgkey=https://www.apache.org/dist/cassandra/KEYS
-              owner: root
-              group: root
-              mode: "000644"
-        install_cassandra:
-          packages:
-            yum:
-              cassandra: []
-        configure_cassandra:
-          commands:
-            01_configure_hosts:
-              command: !FindInMap ["Scripts", "Cassandra", "CreateHostsEntry"]
-            02_setup_data_directories:
-              command: !FindInMap ["Scripts", "Cassandra", "SetupDataDirectories"]
-            03_update_cassandra_yaml:
-              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraYaml"]
-              env:
-                CLUSTER_NAME: !Ref clusterName
-                SEED_NODES: !Join
-                  - ""
-                  - - "a.seed."
-                    - !Ref internalDomain
-                    - ",b.seed."
-                    - !Ref internalDomain
-                    - ",c.seed."
-                    - !Ref internalDomain
-            04_update_cassandra_env_sh:
-              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraEnvSh"]
-            05_update_jvm_options:
-              command: !FindInMap ["Scripts", "Cassandra", "UpdateJvmOptions"]
-            06_update_cassandra_rackdc_properties:
-              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraRackdcProperties"]
-        disable_bootstrapping:
-          commands:
-            disable_bootstrapping:
-              command: !FindInMap ["Scripts", "Cassandra", "DisableBootstrapping"]
-        register_dns:
-          commands:
-            01_create_change_batch:
-              command: !Join
-                - ""
-                - - "echo '{\"Changes\": [{\"Action\": \"UPSERT\", \"ResourceRecordSet\": {\"Name\": \"b.seed."
-                  - !Ref internalDomain
-                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
-            02_register_dns:
-              command: !Join
-                - ""
-                - - "aws route53 change-resource-record-sets --hosted-zone-id "
-                  - !Ref hostedZone
-                  - " --change-batch file:///home/ec2-user/change-batch.json"
-            03_remove_change_batch:
-              command: "rm /home/ec2-user/change-batch.json"
-            04_add_hosts_entry:
-              command: !Join
-                - ""
-                - - "echo \"$(hostname -I) b.seed."
-                  - !Ref internalDomain
-                  - "\" >> /etc/hosts"
-        start_cassandra:
-          services:
-            sysvinit:
-              cassandra:
-                enabled: true
-                ensureRunning: true
-        ensure_cassandra_is_running:
-          commands:
-            01_sleep:
-              command: sleep 60
-            02_check:
-              command: nodetool info
-        unregister_dns:
-          commands:
-            01_create_change_batch:
-              command: !Join
-                - ""
-                - - "echo '{\"Changes\": [{\"Action\": \"DELETE\", \"ResourceRecordSet\": {\"Name\": \"b.seed."
-                  - !Ref internalDomain
-                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
-            02_unregister_dns:
-              command: !Join
-                - ""
-                - - "aws route53 change-resource-record-sets --hosted-zone-id "
-                  - !Ref hostedZone
-                  - " --change-batch file:///home/ec2-user/change-batch.json"
-            03_remove_change_batch:
-              command: "rm /home/ec2-user/change-batch.json"
-
-  seedBDnsRecord:
-    Type: AWS::Route53::RecordSet
-    Properties:
-      HostedZoneId: !Ref hostedZone
-      Name: !Sub "b.seed.${internalDomain}"
-      Type: A
-      TTL: 60
-      ResourceRecords:
-        - !GetAtt seedB.PrivateIp
-
-  seedC:
-    Type: "AWS::EC2::Instance"
-    Properties:
-      ImageId: !FindInMap
-        - Regions
-        - !Ref AWS::Region
-        - AmazonLinux2Ami
-      KeyName: !Ref keyName
-      InstanceType: !Ref instanceType
-      IamInstanceProfile: !Ref instanceProfile
-      SecurityGroupIds:
-        - !Ref securityGroup
-      SubnetId: !Select
-        - 2
-        - Fn::Split:
-            - ","
-            - Fn::ImportValue:
-                !Sub "${networkStackName}-private-subnets"
-      BlockDeviceMappings:
-        - DeviceName: "/dev/sdf"
-          Ebs:
-            VolumeSize: 1024
-            VolumeType: "gp2"
-            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
-        - DeviceName: "/dev/sdg"
-          Ebs:
-            VolumeSize: 64
-            VolumeType: "gp2"
-            DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
-      Tags:
-        - Key: Name
-          Value: !Sub ${AWS::StackName} Seed C
-      UserData:
-        Fn::Base64: !Sub |
-          #!/bin/bash -x
-          echo "${project.version} - ${timestamp}"
-          yum update -y
-          if [ -n "${influxHost}" ]
-          then
-              CONFIG_SET=setup_with_telegraf
-          else
-              CONFIG_SET=setup_without_telegraf
-          fi
-          /opt/aws/bin/cfn-init -v --configsets $CONFIG_SET --stack ${AWS::StackName} --resource seedC --region ${AWS::Region}
-          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource seedC --region ${AWS::Region}
-    CreationPolicy:
-      ResourceSignal:
-        Timeout: PT5M
-    Metadata:
-      AWS::CloudFormation::Init:
-        configSets:
-          setup_with_telegraf:
-            - "ssh_keys"
-            - "ntp"
-            - "haveged"
-            - "openjdk8"
-            - "aws_cli"
-            - "register_dns"
-            - "add_influxdb_repo"
-            - "install_telegraf"
-            - "configure_telegraf"
-            - "start_telegraf"
-            - "add_cassandra_repo"
-            - "install_cassandra"
-            - "configure_cassandra"
-            - "disable_bootstrapping"
-            - "start_cassandra"
-            - "ensure_cassandra_is_running"
-            - "unregister_dns"
-          setup_without_telegraf:
-            - "ssh_keys"
-            - "ntp"
-            - "haveged"
-            - "openjdk8"
-            - "aws_cli"
-            - "register_dns"
-            - "add_cassandra_repo"
-            - "install_cassandra"
-            - "configure_cassandra"
-            - "disable_bootstrapping"
-            - "start_cassandra"
-            - "ensure_cassandra_is_running"
-            - "unregister_dns"
-        ssh_keys:
-          files:
-            /home/ec2-user/.ssh/additional_keys:
-              source: !Ref authorizedKeys
-              owner: root
-              group: root
-              mode: "000644"
-          commands:
-            register_additional_keys:
-              command: "cat /home/ec2-user/.ssh/additional_keys >> /home/ec2-user/.ssh/authorized_keys"
-        ntp:
-          packages:
-            yum:
-              ntp: []
-          services:
-            sysvinit:
-              ntpd:
-                enabled: true
-                ensureRunning: true
-                packages:
-                  yum:
-                    - ntp
-        haveged:
-          packages:
-            rpm:
-              haveged: "https://dl.fedoraproject.org/pub/archive/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
-          services:
-            sysvinit:
-              haveged:
-                enabled: true
-                ensureRunning: true
-        openjdk8:
-          packages:
-            yum:
-              java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
-              java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
-        aws_cli:
-          files:
-            /home/ec2-user/.aws/config:
-              content: !Sub |
-                [default]
-                region=${AWS::Region}
-                output=json
-              owner: ec2-user
-              group: ec2-user
-              mode: "000644"
-        add_influxdb_repo:
-          files:
-            /etc/yum.repos.d/influxdb.repo:
-              content: !FindInMap ["Files", "Telegraf", "InfluxDbRepo"]
-              owner: root
-              group: root
-              mode: "000644"
-        install_telegraf:
-          packages:
-            yum:
-              telegraf: []
-        configure_telegraf:
-          files:
-            /etc/telegraf/telegraf.conf:
-              content: !FindInMap ["Files", "Telegraf", "TelegrafConf"]
-              context:
-                influxHost: !Ref influxHost
-                influxPort: !Ref influxPort
-                influxDatabase: !Ref influxDatabase
-                influxTagStage: !Ref influxTagStage
-                influxTagProduct: !Ref influxTagProduct
-                influxTagTeam: !Ref influxTagTeam
-              owner: ec2-user
-              group: ec2-user
-              mode: "000644"
-          commands:
-            add_instance_id_to_telegraf_conf:
-              command: !FindInMap ["Scripts", "Telegraf", "AddInstanceIdToTelegrafConf"]
-        start_telegraf:
-          services:
-            sysvinit:
-              telegraf:
-                enabled: true
-                ensureRunning: true
-        add_cassandra_repo:
-          files:
-            /etc/yum.repos.d/cassandra.repo:
-              content: |
-                [cassandra]
-                name=Apache Cassandra
-                baseurl=https://www.apache.org/dist/cassandra/redhat/311x/
-                gpgcheck=1
-                repo_gpgcheck=1
-                gpgkey=https://www.apache.org/dist/cassandra/KEYS
-              owner: root
-              group: root
-              mode: "000644"
-        install_cassandra:
-          packages:
-            yum:
-              cassandra: []
-        configure_cassandra:
-          commands:
-            01_configure_hosts:
-              command: !FindInMap ["Scripts", "Cassandra", "CreateHostsEntry"]
-            02_setup_data_directories:
-              command: !FindInMap ["Scripts", "Cassandra", "SetupDataDirectories"]
-            03_update_cassandra_yaml:
-              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraYaml"]
-              env:
-                CLUSTER_NAME: !Ref clusterName
-                SEED_NODES: !Join
-                  - ""
-                  - - "a.seed."
-                    - !Ref internalDomain
-                    - ",b.seed."
-                    - !Ref internalDomain
-                    - ",c.seed."
-                    - !Ref internalDomain
-            04_update_cassandra_env_sh:
-              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraEnvSh"]
-            05_update_jvm_options:
-              command: !FindInMap ["Scripts", "Cassandra", "UpdateJvmOptions"]
-            06_update_cassandra_rackdc_properties:
-              command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraRackdcProperties"]
-        disable_bootstrapping:
-          commands:
-            disable_bootstrapping:
-              command: !FindInMap ["Scripts", "Cassandra", "DisableBootstrapping"]
-        register_dns:
-          commands:
-            01_create_change_batch:
-              command: !Join
-                - ""
-                - - "echo '{\"Changes\": [{\"Action\": \"UPSERT\", \"ResourceRecordSet\": {\"Name\": \"c.seed."
-                  - !Ref internalDomain
-                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
-            02_register_dns:
-              command: !Join
-                - ""
-                - - "aws route53 change-resource-record-sets --hosted-zone-id "
-                  - !Ref hostedZone
-                  - " --change-batch file:///home/ec2-user/change-batch.json"
-            03_remove_change_batch:
-              command: "rm /home/ec2-user/change-batch.json"
-            04_add_hosts_entry:
-              command: !Join
-                - ""
-                - - "echo \"$(hostname -I) c.seed."
-                  - !Ref internalDomain
-                  - "\" >> /etc/hosts"
-        start_cassandra:
-          services:
-            sysvinit:
-              cassandra:
-                enabled: true
-                ensureRunning: true
-        ensure_cassandra_is_running:
-          commands:
-            01_sleep:
-              command: sleep 60
-            02_check:
-              command: nodetool info
-        unregister_dns:
-          commands:
-            01_create_change_batch:
-              command: !Join
-                - ""
-                - - "echo '{\"Changes\": [{\"Action\": \"DELETE\", \"ResourceRecordSet\": {\"Name\": \"c.seed."
-                  - !Ref internalDomain
-                  - "\", \"Type\": \"A\", \"TTL\": 60, \"ResourceRecords\": [{\"Value\": \"'$(hostname -I)'\"}]}}]}' > /home/ec2-user/change-batch.json"
-            02_unregister_dns:
-              command: !Join
-                - ""
-                - - "aws route53 change-resource-record-sets --hosted-zone-id "
-                  - !Ref hostedZone
-                  - " --change-batch file:///home/ec2-user/change-batch.json"
-            03_remove_change_batch:
-              command: "rm /home/ec2-user/change-batch.json"
-
-  seedCDnsRecord:
-    Type: AWS::Route53::RecordSet
-    Properties:
-      HostedZoneId: !Ref hostedZone
-      Name: !Sub "c.seed.${internalDomain}"
-      Type: A
-      TTL: 60
-      ResourceRecords:
-        - !GetAtt seedC.PrivateIp
-
   launchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
     Properties:
@@ -1181,7 +428,7 @@ Resources:
       BlockDeviceMappings:
         - DeviceName: "/dev/sdf"
           Ebs:
-            VolumeSize: 1024
+            VolumeSize: !Ref volumeSize
             VolumeType: "gp2"
             DeleteOnTermination: !Ref deleteEbsVolumesOnTermination
         - DeviceName: "/dev/sdg"
@@ -1205,30 +452,28 @@ Resources:
     Metadata:
       AWS::CloudFormation::Init:
         configSets:
-          setup_with_telegraf:
+          basics:
             - "ssh_keys"
             - "ntp"
             - "haveged"
             - "openjdk8"
+          cassandra:
+            - "add_cassandra_repo"
+            - "install_cassandra"
+            - "configure_cassandra"
+            - "cassandra_watchdog"
+            - "create_dns_script"
+            - "create_disable_bootstrapping_script"
+          setup_with_telegraf:
+            - ConfigSet: "basics"
             - "add_influxdb_repo"
             - "install_telegraf"
             - "configure_telegraf"
             - "start_telegraf"
-            - "add_cassandra_repo"
-            - "install_cassandra"
-            - "configure_cassandra"
-            - "start_cassandra"
-            - "ensure_cassandra_is_running"
+            - ConfigSet: "cassandra"
           setup_without_telegraf:
-            - "ssh_keys"
-            - "ntp"
-            - "haveged"
-            - "openjdk8"
-            - "add_cassandra_repo"
-            - "install_cassandra"
-            - "configure_cassandra"
-            - "start_cassandra"
-            - "ensure_cassandra_is_running"
+            - ConfigSet: "basics"
+            - ConfigSet: "cassandra"
         ssh_keys:
           files:
             /home/ec2-user/.ssh/additional_keys:
@@ -1340,25 +585,33 @@ Resources:
               command: !FindInMap ["Scripts", "Cassandra", "UpdateJvmOptions"]
             06_update_cassandra_rackdc_properties:
               command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraRackdcProperties"]
-        start_cassandra:
-          services:
-            sysvinit:
-              cassandra:
-                enabled: true
-                ensureRunning: true
-        ensure_cassandra_is_running:
-          commands:
-            01_sleep:
-              command: sleep 60
-            02_check:
-              command: nodetool info
+        cassandra_watchdog:
+          files:
+            /etc/cron.hourly/cassandra-watchdog.sh:
+              content: !FindInMap ["Scripts", "Cassandra", "CassandraWatchdog"]
+              owner: root
+              group: root
+              mode: "000755"
+        create_dns_script:
+          files:
+            /home/ec2-user/register-dns.sh:
+              content: !FindInMap ["Scripts", "Cassandra", "RegisterDns"]
+              context:
+                internalDomain: !Ref internalDomain
+                hostedZone: !Ref hostedZone
+              owner: ec2-user
+              group: ec2-user
+              mode: "000755"
+        create_disable_bootstrapping_script:
+          files:
+            /home/ec2-user/disable-bootstrapping.sh:
+              content: !FindInMap ["Scripts", "Cassandra", "DisableBootstrapping"]
+              owner: ec2-user
+              group: ec2-user
+              mode: "000755"
 
   autoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
-    DependsOn:
-      - seedADnsRecord
-      - seedBDnsRecord
-      - seedCDnsRecord
     Properties:
       LaunchConfigurationName: !Ref launchConfiguration
       MaxSize: 30
@@ -1371,18 +624,24 @@ Resources:
                 - ","
                 - Fn::ImportValue:
                     !Sub "${networkStackName}-private-subnets"
-        - Fn::Select:
+        - Fn::If:
+          - useSecondAvailabilityZone
+          - Fn::Select:
             - 1
             - Fn::Split:
                 - ","
                 - Fn::ImportValue:
                     !Sub "${networkStackName}-private-subnets"
-        - Fn::Select:
+          - !Ref AWS::NoValue
+        - Fn::If:
+          - useThirdAvailabilityZone
+          - Fn::Select:
             - 2
             - Fn::Split:
                 - ","
                 - Fn::ImportValue:
                     !Sub "${networkStackName}-private-subnets"
+          - !Ref AWS::NoValue
       Tags:
         - Key: Name
           Value: !Sub ${AWS::StackName} AS
@@ -1400,9 +659,9 @@ Outputs:
     Description: The list of seed nodes to be used by connecting systems.
     Value: !Join
       - ","
-      - - !Ref seedADnsRecord
-        - !Ref seedBDnsRecord
-        - !Ref seedCDnsRecord
+      - - !Sub "a.seed.${internalDomain}"
+        - !Sub "b.seed.${internalDomain}"
+        - !Sub "c.seed.${internalDomain}"
     Export:
       Name: !Sub ${AWS::StackName}-seed-nodes
 
