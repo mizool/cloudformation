@@ -573,7 +573,7 @@ Resources:
                 connector.name=cassandra
                 cassandra.contact-points={{cassandraContactPoints}}
                 cassandra.consistency-level=LOCAL_QUORUM
-                cassandra.client.read-timeout=2m
+                cassandra.client.read-timeout=6m
               context:
                 cassandraContactPoints:
                   Fn::ImportValue:
@@ -844,7 +844,7 @@ Resources:
                 connector.name=cassandra
                 cassandra.contact-points={{cassandraContactPoints}}
                 cassandra.consistency-level=LOCAL_QUORUM
-                cassandra.client.read-timeout=2m
+                cassandra.client.read-timeout=6m
               context:
                 cassandraContactPoints:
                   Fn::ImportValue:
