@@ -139,6 +139,21 @@
                         <autoReleaseAfterClose>true</autoReleaseAfterClose>
                     </configuration>
                 </plugin>
+                <plugin>
+                    <groupId>com.amashchenko.maven.plugin</groupId>
+                    <artifactId>gitflow-maven-plugin</artifactId>
+                    <version>1.19.0</version>
+                    <configuration>
+                        <commitDevelopmentVersionAtStart>true</commitDevelopmentVersionAtStart>
+                        <?SORTPOM IGNORE?>
+                        <commitMessagePrefix>[gitflow] </commitMessagePrefix>
+                        <?SORTPOM RESUME?>
+                        <pushRemote>true</pushRemote>
+                        <skipTestProject>true</skipTestProject>
+                        <useSnapshotInHotfix>true</useSnapshotInHotfix>
+                        <useSnapshotInRelease>true</useSnapshotInRelease>
+                    </configuration>
+                </plugin>
             </plugins>
         </pluginManagement>
 
