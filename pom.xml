@@ -44,12 +44,13 @@
     <distributionManagement>
         <snapshotRepository>
             <id>ossrh</id>
-            <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+            <url>https://${ossrh.host}/content/repositories/snapshots</url>
         </snapshotRepository>
     </distributionManagement>
 
     <properties>
         <encoding>UTF-8</encoding>
+        <ossrh.host>s01.oss.sonatype.org</ossrh.host>
         <project.build.sourceEncoding>${encoding}</project.build.sourceEncoding>
         <timestamp>${maven.build.timestamp}</timestamp>
     </properties>
@@ -134,7 +135,7 @@
                     <extensions>true</extensions>
                     <configuration>
                         <serverId>ossrh</serverId>
-                        <nexusUrl>https://oss.sonatype.org/</nexusUrl>
+                        <nexusUrl>https://${ossrh.host}/</nexusUrl>
                         <autoReleaseAfterClose>true</autoReleaseAfterClose>
                     </configuration>
                 </plugin>
