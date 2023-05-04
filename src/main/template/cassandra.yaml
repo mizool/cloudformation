@@ -460,6 +460,11 @@ Resources:
             - "haveged"
             - "openjdk8"
             - "cloud_watch_agent"
+          telegraf:
+            - "add_influxdb_repo"
+            - "install_telegraf"
+            - "configure_telegraf"
+            - "start_telegraf"
           cassandra:
             - "add_cassandra_repo"
             - "install_cassandra"
@@ -469,10 +474,7 @@ Resources:
             - "create_disable_bootstrapping_script"
           setup_with_telegraf:
             - ConfigSet: "basics"
-            - "add_influxdb_repo"
-            - "install_telegraf"
-            - "configure_telegraf"
-            - "start_telegraf"
+            - ConfigSet: "telegraf"
             - ConfigSet: "cassandra"
           setup_without_telegraf:
             - ConfigSet: "basics"
@@ -519,8 +521,8 @@ Resources:
               content: |
                 {
                   "agent": {
-                      "metrics_collection_interval": 60,
-                      "run_as_user": "cwagent"
+                    "metrics_collection_interval": 60,
+                    "run_as_user": "cwagent"
                   },
                   "metrics": {
                     "append_dimensions": {
