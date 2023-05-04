@@ -5,7 +5,7 @@
 
     <groupId>com.github.mizool.cloudformation</groupId>
     <artifactId>cloudformation</artifactId>
-    <version>0.6</version>
+    <version>0.7</version>
     <packaging>pom</packaging>
 
     <name>${project.groupId}:${project.artifactId}</name>
@@ -44,12 +44,13 @@
     <distributionManagement>
         <snapshotRepository>
             <id>ossrh</id>
-            <url>https://oss.sonatype.org/content/repositories/snapshots</url>
+            <url>https://${ossrh.host}/content/repositories/snapshots</url>
         </snapshotRepository>
     </distributionManagement>
 
     <properties>
         <encoding>UTF-8</encoding>
+        <ossrh.host>s01.oss.sonatype.org</ossrh.host>
         <project.build.sourceEncoding>${encoding}</project.build.sourceEncoding>
         <timestamp>${maven.build.timestamp}</timestamp>
     </properties>
@@ -134,8 +135,23 @@
                     <extensions>true</extensions>
                     <configuration>
                         <serverId>ossrh</serverId>
-                        <nexusUrl>https://oss.sonatype.org/</nexusUrl>
+                        <nexusUrl>https://${ossrh.host}/</nexusUrl>
                         <autoReleaseAfterClose>true</autoReleaseAfterClose>
+                    </configuration>
+                </plugin>
+                <plugin>
+                    <groupId>com.amashchenko.maven.plugin</groupId>
+                    <artifactId>gitflow-maven-plugin</artifactId>
+                    <version>1.19.0</version>
+                    <configuration>
+                        <commitDevelopmentVersionAtStart>true</commitDevelopmentVersionAtStart>
+                        <?SORTPOM IGNORE?>
+                        <commitMessagePrefix>[gitflow] </commitMessagePrefix>
+                        <?SORTPOM RESUME?>
+                        <pushRemote>true</pushRemote>
+                        <skipTestProject>true</skipTestProject>
+                        <useSnapshotInHotfix>true</useSnapshotInHotfix>
+                        <useSnapshotInRelease>true</useSnapshotInRelease>
                     </configuration>
                 </plugin>
             </plugins>

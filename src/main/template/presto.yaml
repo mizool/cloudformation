@@ -299,7 +299,7 @@ Resources:
               !Sub "${networkStackName}-vpc"
           VPCRegion: !Ref "AWS::Region"
 
-  allowRoute53RecordSetManagementRole:
+  prestoRole:
     Type: "AWS::IAM::Role"
     Properties:
       AssumeRolePolicyDocument:
@@ -312,6 +312,8 @@ Resources:
             Action:
               - "sts:AssumeRole"
       Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
       Policies:
         - PolicyName: "AllowAllPolicy"
           PolicyDocument:
@@ -330,7 +332,7 @@ Resources:
     Properties:
       Path: "/"
       Roles:
-        - !Ref allowRoute53RecordSetManagementRole
+        - !Ref prestoRole
 
   coordinatorLaunchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
@@ -382,6 +384,7 @@ Resources:
             - "haveged"
             - "openjdk8"
             - "aws_cli"
+            - "cloud_watch_agent"
             - "register_dns"
             - "add_influxdb_repo"
             - "install_telegraf"
@@ -398,6 +401,7 @@ Resources:
             - "haveged"
             - "openjdk8"
             - "aws_cli"
+            - "cloud_watch_agent"
             - "register_dns"
             - "download_presto"
             - "configure_presto"
@@ -450,6 +454,55 @@ Resources:
               owner: ec2-user
               group: ec2-user
               mode: "000644"
+        cloud_watch_agent:
+          files:
+            /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json:
+              content: |
+                {
+                  "agent": {
+                      "metrics_collection_interval": 60,
+                      "run_as_user": "cwagent"
+                  },
+                  "metrics": {
+                    "append_dimensions": {
+                      "AutoScalingGroupName": "${aws:AutoScalingGroupName}",
+                      "ImageId": "${aws:ImageId}",
+                      "InstanceId": "${aws:InstanceId}",
+                      "InstanceType": "${aws:InstanceType}"
+                    },
+                    "metrics_collected": {
+                      "disk": {
+                        "measurement": [
+                          "used_percent"
+                        ],
+                        "metrics_collection_interval": 60,
+                        "resources": [
+                          "*"
+                        ]
+                      },
+                      "mem": {
+                        "measurement": [
+                          "mem_used_percent"
+                        ],
+                        "metrics_collection_interval": 60
+                      }
+                    }
+                  }
+                }
+              owner: root
+              group: root
+              mode: "000644"
+          packages:
+            yum:
+              amazon-cloudwatch-agent: [ ]
+          services:
+            sysvinit:
+              amazon-cloudwatch-agent:
+                enabled: true
+                ensureRunning: true
+                packages:
+                  yum:
+                    - amazon-cloudwatch-agent
         register_dns:
           commands:
             01_create_change_batch:
