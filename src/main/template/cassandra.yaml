@@ -380,7 +380,7 @@ Resources:
               !Sub "${networkStackName}-vpc"
           VPCRegion: !Ref "AWS::Region"
 
-  allowRoute53RecordSetManagementRole:
+  cassandraRole:
     Type: "AWS::IAM::Role"
     Properties:
       AssumeRolePolicyDocument:
@@ -393,6 +393,8 @@ Resources:
             Action:
               - "sts:AssumeRole"
       Path: "/"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
       Policies:
         - PolicyName: "AllowAllPolicy"
           PolicyDocument:
@@ -411,7 +413,7 @@ Resources:
     Properties:
       Path: "/"
       Roles:
-        - !Ref allowRoute53RecordSetManagementRole
+        - !Ref cassandraRole
 
   launchConfiguration:
     Type: AWS::AutoScaling::LaunchConfiguration
@@ -457,6 +459,7 @@ Resources:
             - "ntp"
             - "haveged"
             - "openjdk8"
+            - "cloud_watch_agent"
           cassandra:
             - "add_cassandra_repo"
             - "install_cassandra"
@@ -510,6 +513,55 @@ Resources:
             yum:
               java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
               java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
+        cloud_watch_agent:
+          files:
+            /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json:
+              content: |
+                {
+                  "agent": {
+                      "metrics_collection_interval": 60,
+                      "run_as_user": "cwagent"
+                  },
+                  "metrics": {
+                    "append_dimensions": {
+                      "AutoScalingGroupName": "${aws:AutoScalingGroupName}",
+                      "ImageId": "${aws:ImageId}",
+                      "InstanceId": "${aws:InstanceId}",
+                      "InstanceType": "${aws:InstanceType}"
+                    },
+                    "metrics_collected": {
+                      "disk": {
+                        "measurement": [
+                          "used_percent"
+                        ],
+                        "metrics_collection_interval": 60,
+                        "resources": [
+                          "*"
+                        ]
+                      },
+                      "mem": {
+                        "measurement": [
+                          "mem_used_percent"
+                        ],
+                        "metrics_collection_interval": 60
+                      }
+                    }
+                  }
+                }
+              owner: root
+              group: root
+              mode: "000644"
+          packages:
+            yum:
+              amazon-cloudwatch-agent: [ ]
+          services:
+            sysvinit:
+              amazon-cloudwatch-agent:
+                enabled: true
+                ensureRunning: true
+                packages:
+                  yum:
+                    - amazon-cloudwatch-agent
         add_influxdb_repo:
           files:
             /etc/yum.repos.d/influxdb.repo:
@@ -585,6 +637,8 @@ Resources:
               command: !FindInMap ["Scripts", "Cassandra", "UpdateJvmOptions"]
             06_update_cassandra_rackdc_properties:
               command: !FindInMap ["Scripts", "Cassandra", "UpdateCassandraRackdcProperties"]
+            07_update_vm_max_map_count:
+              command: echo "vm.max_map_count=1048575" >> /etc/sysctl.d/00-defaults.conf; sysctl -w vm.max_map_count=1048575
         cassandra_watchdog:
           files:
             /etc/cron.hourly/cassandra-watchdog.sh:
