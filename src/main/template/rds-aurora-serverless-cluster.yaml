@@ -165,7 +165,12 @@ Resources:
         Fn::If:
           - isMySql
           - aurora-mysql
-          - aurora-postgres
+          - aurora-postgresql
+      EngineVersion:
+        Fn::If:
+          - isMySql
+          - "8.0.mysql_aurora.3.02.3"
+          - "14.7"
       EngineMode: serverless
       MasterUsername: !Ref masterUsername
       MasterUserPassword: !Ref masterUserPassword
@@ -175,8 +180,7 @@ Resources:
       ScalingConfiguration:
         AutoPause: true
         MinCapacity: 2
-        MaxCapacity: 8
-        SecondsUntilAutoPause: 300
+        SecondsUntilAutoPause: 3600
 
 Outputs:
   JdbcUrl:
