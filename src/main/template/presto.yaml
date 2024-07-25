@@ -30,6 +30,11 @@ Parameters:
     MinLength: 2
     AllowedPattern: "^[a-z0-9]*$"
 
+  deployableBucketName:
+    Description: The name of the bucket that contains the deployable of the application.
+    Type: String
+    MinLength: 1
+
   papertrailHost:
     Description: The host name of the papertrail log destination to use by the application.
     Type: String
@@ -315,6 +320,24 @@ Resources:
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
       Policies:
+        - PolicyName: "DeployableBucketReadPolicy"
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Join
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref deployableBucketName
+                      - "/*"
+                  - !Join
+                    - ""
+                    - - "arn:aws:s3:::"
+                      - !Ref deployableBucketName
         - PolicyName: "AllowAllPolicy"
           PolicyDocument:
             Version: "2012-10-17"
@@ -379,11 +402,12 @@ Resources:
       AWS::CloudFormation::Init:
         configSets:
           basics:
+            - "aws_cli"
             - "ssh_keys"
             - "ntp"
-            - "haveged"
+            - "download_haveged"
+            - "install_haveged"
             - "openjdk8"
-            - "aws_cli"
             - "cloud_watch_agent"
           telegraf:
             - "add_influxdb_repo"
@@ -404,6 +428,16 @@ Resources:
           setup_without_telegraf:
             - ConfigSet: "basics"
             - ConfigSet: "presto"
+        aws_cli:
+          files:
+            /home/ec2-user/.aws/config:
+              content: !Sub |
+                [default]
+                region=${AWS::Region}
+                output=json
+              owner: ec2-user
+              group: ec2-user
+              mode: "000644"
         ssh_keys:
           files:
             /home/ec2-user/.ssh/additional_keys:
@@ -426,10 +460,14 @@ Resources:
                 packages:
                   yum:
                     - ntp
-        haveged:
+        download_haveged:
+          commands:
+            download_haveged:
+              command: !Sub "aws s3 cp s3://${deployableBucketName}/3rdparty/h/haveged-1.9.13-1.el7.x86_64.rpm /opt/haveged-1.9.13-1.el7.x86_64.rpm"
+        install_haveged:
           packages:
             rpm:
-              haveged: "https://dl.fedoraproject.org/pub/archive/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
+              haveged: /opt/haveged-1.9.13-1.el7.x86_64.rpm
           services:
             sysvinit:
               haveged:
@@ -440,16 +478,6 @@ Resources:
             yum:
               java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
               java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
-        aws_cli:
-          files:
-            /home/ec2-user/.aws/config:
-              content: !Sub |
-                [default]
-                region=${AWS::Region}
-                output=json
-              owner: ec2-user
-              group: ec2-user
-              mode: "000644"
         cloud_watch_agent:
           files:
             /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json:
@@ -558,10 +586,10 @@ Resources:
         download_presto:
           commands:
             download_presto:
-              command: |
+              command: !Sub |
                 #!/bin/bash -xe
                 mkdir /opt/presto
-                wget -q -O - "https://repo1.maven.org/maven2/io/prestosql/presto-server/326/presto-server-326.tar.gz" | tar xvzf - -C /opt/presto
+                aws s3 cp --quiet "s3://${deployableBucketName}/3rdparty/io/prestosql/presto-server/326/presto-server-326.tar.gz" /dev/stdout | tar xvzf - -C /opt/presto
                 mv "/opt/presto/presto-server-326" /opt/presto/presto-server
                 mkdir /var/presto
                 mkdir /var/presto/data
@@ -658,9 +686,9 @@ Resources:
               mode: "000644"
           commands:
             01_download_remote_syslog:
-              command: |
+              command: !Sub |
                 #!/bin/bash -xe
-                wget -q -O - "https://github.com/papertrail/remote_syslog2/releases/download/v0.20/remote_syslog_linux_amd64.tar.gz" | tar xvzf - -C /etc
+                aws s3 cp --quiet "s3://${deployableBucketName}/3rdparty/papertrail/remote_syslog2/releases/download/v0.20/remote_syslog_linux_amd64.tar.gz" /dev/stdout | tar xvzf - -C /etc
             02_patch_log_files_yml:
               command: |
                 export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
@@ -686,10 +714,10 @@ Resources:
         setup_presto_cli:
           commands:
             setup_presto_cli:
-              command: |
+              command: !Sub |
                 #!/bin/bash -xe
                 mkdir /opt/presto/presto-cli
-                wget -O /opt/presto/presto-cli/presto-cli-executable.jar "https://repo1.maven.org/maven2/io/prestosql/presto-cli/326/presto-cli-326-executable.jar"
+                aws s3 cp --quiet "s3://${deployableBucketName}/3rdparty/io/prestosql/presto-cli/326/presto-cli-326-executable.jar" /opt/presto/presto-cli/presto-cli-executable.jar
                 chmod +x /opt/presto/presto-cli/presto-cli-executable.jar
                 ln -s /opt/presto/presto-cli/presto-cli-executable.jar /bin/presto
 
@@ -740,7 +768,8 @@ Resources:
           basics:
             - "ssh_keys"
             - "ntp"
-            - "haveged"
+            - "download_haveged"
+            - "install_haveged"
             - "openjdk8"
             - "cloud_watch_agent"
           telegraf:
@@ -782,10 +811,14 @@ Resources:
                 packages:
                   yum:
                     - ntp
-        haveged:
+        download_haveged:
+          commands:
+            download_haveged:
+              command: !Sub "aws s3 cp s3://${deployableBucketName}/3rdparty/h/haveged-1.9.13-1.el7.x86_64.rpm /opt/haveged-1.9.13-1.el7.x86_64.rpm"
+        install_haveged:
           packages:
             rpm:
-              haveged: "https://dl.fedoraproject.org/pub/archive/epel/7/x86_64/Packages/h/haveged-1.9.1-1.el7.x86_64.rpm"
+              haveged: /opt/haveged-1.9.13-1.el7.x86_64.rpm
           services:
             sysvinit:
               haveged:
@@ -882,10 +915,10 @@ Resources:
         download_presto:
           commands:
             download_presto:
-              command: |
+              command: !Sub |
                 #!/bin/bash -xe
                 mkdir /opt/presto
-                wget -q -O - "https://repo1.maven.org/maven2/io/prestosql/presto-server/326/presto-server-326.tar.gz" | tar xvzf - -C /opt/presto
+                aws s3 cp --quiet "s3://${deployableBucketName}/3rdparty/io/prestosql/presto-server/326/presto-server-326.tar.gz" /dev/stdout | tar xvzf - -C /opt/presto
                 mv "/opt/presto/presto-server-326" /opt/presto/presto-server
                 mkdir /var/presto
                 mkdir /var/presto/data
@@ -980,9 +1013,9 @@ Resources:
               mode: "000644"
           commands:
             01_download_remote_syslog:
-              command: |
+              command: !Sub |
                 #!/bin/bash -xe
-                wget -q -O - "https://github.com/papertrail/remote_syslog2/releases/download/v0.20/remote_syslog_linux_amd64.tar.gz" | tar xvzf - -C /etc
+                aws s3 cp --quiet "s3://${deployableBucketName}/3rdparty/papertrail/remote_syslog2/releases/download/v0.20/remote_syslog_linux_amd64.tar.gz" /dev/stdout | tar xvzf - -C /etc
             02_patch_log_files_yml:
               command: |
                 export INSTANCE_ID=$(curl http://169.254.169.254/latest/meta-data/instance-id)
