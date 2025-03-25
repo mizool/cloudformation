@@ -1082,6 +1082,7 @@ Resources:
       AutoScalingRollingUpdate:
         MinInstancesInService: 1
         WaitOnResourceSignals: true
+        PauseTime: PT10M
 
   workerAutoScalingGroup:
     Type: AWS::AutoScaling::AutoScalingGroup
@@ -1126,6 +1127,7 @@ Resources:
       AutoScalingRollingUpdate:
         MinInstancesInService: 1
         WaitOnResourceSignals: true
+        PauseTime: PT10M
 
 Outputs:
   SecurityGroup:
