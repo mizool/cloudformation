@@ -407,7 +407,8 @@ Resources:
             - "ntp"
             - "download_haveged"
             - "install_haveged"
-            - "openjdk8"
+            - "add_corretto_repo"
+            - "jdk"
             - "cloud_watch_agent"
           telegraf:
             - "add_influxdb_repo"
@@ -473,11 +474,24 @@ Resources:
               haveged:
                 enabled: true
                 ensureRunning: true
-        openjdk8:
+        add_corretto_repo:
+          files:
+            /etc/yum.repos.d/corretto.repo:
+              content: |
+                [AmazonCorretto]
+                name=Amazon Corretto
+                baseurl=https://yum.corretto.aws/$basearch
+                enabled=1
+                gpgkey=https://yum.corretto.aws/corretto.key
+                gpgcheck=1
+              owner: root
+              group: root
+              mode: "000644"
+        jdk:
           packages:
             yum:
-              java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
-              java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
+              java-11-amazon-corretto-headless: [ "11.0.11+9-1.amzn2.x86_64" ]
+              java-11-amazon-corretto-devel: [ "11.0.11.9-1.x86_64" ]
         cloud_watch_agent:
           files:
             /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json:
@@ -770,7 +784,8 @@ Resources:
             - "ntp"
             - "download_haveged"
             - "install_haveged"
-            - "openjdk8"
+            - "add_corretto_repo"
+            - "jdk"
             - "cloud_watch_agent"
           telegraf:
             - "add_influxdb_repo"
@@ -824,11 +839,24 @@ Resources:
               haveged:
                 enabled: true
                 ensureRunning: true
-        openjdk8:
+        add_corretto_repo:
+          files:
+            /etc/yum.repos.d/corretto.repo:
+              content: |
+                [AmazonCorretto]
+                name=Amazon Corretto
+                baseurl=https://yum.corretto.aws/$basearch
+                enabled=1
+                gpgkey=https://yum.corretto.aws/corretto.key
+                gpgcheck=1
+              owner: root
+              group: root
+              mode: "000644"
+        jdk:
           packages:
             yum:
-              java-1.8.0-openjdk: ["1.8.0.222.b10-0.amzn2.0.1"]
-              java-1.8.0-openjdk-devel: ["1.8.0.222.b10-0.amzn2.0.1"]
+              java-11-amazon-corretto-headless: [ "11.0.11+9-1.amzn2.x86_64" ]
+              java-11-amazon-corretto-devel: [ "11.0.11.9-1.x86_64" ]
         cloud_watch_agent:
           files:
             /opt/aws/amazon-cloudwatch-agent/etc/amazon-cloudwatch-agent.json:
